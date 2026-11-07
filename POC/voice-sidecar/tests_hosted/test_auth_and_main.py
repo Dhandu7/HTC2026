@@ -155,3 +155,19 @@ def test_dynamodb_store_needs_a_table_name():
     with pytest.raises(SystemExit):
         hosted_main.build_store({"VOICE_STORE": "dynamodb"})
     assert type(hosted_main.build_store({"VOICE_STORE": "memory"})).__name__ == "MemoryRecordStore"
+
+
+def test_a_key_that_does_not_look_like_a_key_is_warned_about_without_printing_it(capsys):
+    load_api_key({"ELEVENLABS_API_KEY": "keyid_NOT_A_SECRET_VALUE"})
+    err = capsys.readouterr().err
+    assert "WARNING" in err and "sk_" in err and "NOT_A_SECRET_VALUE" not in err
+    load_api_key({"ELEVENLABS_API_KEY": "sk_fine"})
+    assert capsys.readouterr().err == ""
+
+
+def test_check_config_reports_whether_the_key_looks_right_without_showing_it():
+    bad = check_config({"ELEVENLABS_API_KEY": "keyid_xyz"})
+    good = check_config({"ELEVENLABS_API_KEY": "sk_xyz"})
+    none = check_config({})
+    assert bad["elevenlabs_key_looks_like_a_key"] is False and good["elevenlabs_key_looks_like_a_key"] is True and none["elevenlabs_key_looks_like_a_key"] is None
+    assert "keyid_xyz" not in json.dumps(bad) and "sk_xyz" not in json.dumps(good)

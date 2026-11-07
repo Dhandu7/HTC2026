@@ -27,6 +27,13 @@ env_value() {
   sed -n -E "s/^[[:space:]]*(export[[:space:]]+)?$1[[:space:]]*=[[:space:]]*//p" "$ENV_FILE" | head -n 1 \
     | sed -E "s/[[:space:]]+#.*$//; s/[[:space:]]+$//; s/^\"(.*)\"$/\1/; s/^'(.*)'$/\1/"
 }
+# Say so if a stored value does not look like an API key (they start with sk_). Never shows the value.
+shape_hint() {
+  case "$1" in
+    ""|sk_*) ;;
+    *) echo "  warning: the value found in $2 does not start with sk_. ElevenLabs API keys do, so this is probably the key's ID, not the key. Create or rotate a key and copy the one that starts with sk_." ;;
+  esac
+}
 # Commands that talk to ElevenLabs call this: it sets ELEVENLABS_API_KEY unless it is already set or you use Secrets Manager.
 load_key() {
   if [ -z "${ELEVENLABS_API_KEY:-}" ] && [ -z "${ELEVENLABS_SECRET_ID:-}" ]; then
@@ -54,10 +61,15 @@ case "${1:-}" in
     security add-generic-password -a "${USER:-user}" -s "$KEY_SERVICE" -U -w
     echo "Stored in your login Keychain as '$KEY_SERVICE'. Check with: ./hosted.sh key-check" ;;
   key-check)
-    where=""
-    [ -n "$(env_value ELEVENLABS_API_KEY)" ] && where="$where ${ENV_FILE}"
-    if have_keychain && security find-generic-password -a "${USER:-user}" -s "$KEY_SERVICE" >/dev/null 2>&1; then where="$where Keychain"; fi
-    if [ -n "$where" ]; then echo "key: found in:$where (not shown)"; else echo "key: not found. Paste it into $(pwd)/${ENV_FILE} (ELEVENLABS_API_KEY=...) or run ./hosted.sh key-set"; exit 1; fi ;;
+    where=""; hints=""
+    fv="$(env_value ELEVENLABS_API_KEY)"
+    if [ -n "$fv" ]; then where="$where ${ENV_FILE}"; hints="$hints$(shape_hint "$fv" "${ENV_FILE}")"; fi
+    if have_keychain && security find-generic-password -a "${USER:-user}" -s "$KEY_SERVICE" >/dev/null 2>&1; then
+      where="$where Keychain"
+      kv="$(security find-generic-password -a "${USER:-user}" -s "$KEY_SERVICE" -w 2>/dev/null || true)"
+      hints="$hints$(shape_hint "$kv" "the Keychain")"
+    fi
+    if [ -n "$where" ]; then echo "key: found in:$where (not shown)"; [ -z "$hints" ] || echo "$hints"; else echo "key: not found. Paste it into $(pwd)/${ENV_FILE} (ELEVENLABS_API_KEY=...) or run ./hosted.sh key-set"; exit 1; fi ;;
   key-delete)
     have_keychain || { echo "no Keychain here"; exit 2; }
     security delete-generic-password -a "${USER:-user}" -s "$KEY_SERVICE" >/dev/null && echo "key removed from the Keychain" || echo "no stored key to remove" ;;

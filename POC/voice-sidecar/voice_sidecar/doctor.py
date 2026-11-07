@@ -10,7 +10,7 @@ import os
 import sys
 from typing import Optional
 
-from .elevenlabs import DEFAULT_BASE_URL, ElevenLabsClient, ElevenLabsError
+from .elevenlabs import DEFAULT_BASE_URL, ElevenLabsClient, ElevenLabsError, key_shape_warning
 
 
 def diagnose(client: ElevenLabsClient) -> "tuple[list[str], bool]":
@@ -67,6 +67,9 @@ def main(argv: Optional[list] = None) -> int:
     if not key:
         print("No key found. Run `./hosted.sh key-set` first (or set ELEVENLABS_API_KEY).", file=sys.stderr)
         return 2
+    warn = key_shape_warning(key)
+    if warn:
+        print(f"Warning: {warn}\n")
     client = ElevenLabsClient(key, os.environ.get("ELEVENLABS_BASE_URL", DEFAULT_BASE_URL))
     lines, ok = diagnose(client)
     print("\n".join(lines))

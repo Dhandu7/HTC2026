@@ -20,6 +20,17 @@ DEFAULT_BASE_URL = "https://api.elevenlabs.io"  # regional endpoints (US, EU, In
 VOICE_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
 
+KEY_SHAPE_WARNING = (
+    "the key does not start with 'sk_'. ElevenLabs API keys do, so this is probably the key's ID (shown in the key list), "
+    "not the key itself. The key is shown only once, when you create or rotate it: make a new one and copy that value."
+)
+
+
+def key_shape_warning(key: str) -> "Optional[str]":
+    """A warning if `key` does not look like an ElevenLabs API key, else None. Never includes the value."""
+    return None if key.strip().startswith("sk_") else KEY_SHAPE_WARNING
+
+
 class ElevenLabsError(Exception):
     """`status` is the HTTP status our API should answer with; `message` is safe to show a user."""
 

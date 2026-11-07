@@ -100,3 +100,16 @@ def test_an_unexpected_error_logs_only_its_type(caplog, monkeypatch):
         with pytest.raises(RuntimeError):
             svc.create("u1", CONSENT, UPLOADS())
     assert "create failed: RuntimeError" in caplog.text and "sk_live_123" not in caplog.text
+
+
+# ---- a key ID pasted instead of the key ----
+
+
+def test_the_key_shape_check_catches_an_id_and_never_includes_the_value():
+    from voice_sidecar.elevenlabs import key_shape_warning
+
+    assert key_shape_warning("sk_abc123") is None and key_shape_warning("  sk_abc123\n") is None
+    for bad in ("abc123keyid", "", "Bearer sk_x", "ELEVENLABS_API_KEY=sk_x"):
+        w = key_shape_warning(bad)
+        assert w and "sk_" in w and "ID" in w
+        assert bad.strip() == "" or bad not in w

@@ -119,3 +119,13 @@ def test_the_real_env_files_are_set_up_safely():
     real = SIDECAR / ".env"
     if real.exists():
         assert stat.S_IMODE(real.stat().st_mode) & 0o077 == 0, ".env must not be readable by other users"
+
+
+def test_key_check_warns_when_the_stored_value_is_not_a_key_and_never_shows_it(box):
+    r = run(box, "key-check", env_file_text="ELEVENLABS_API_KEY=abc123_THE_KEY_ID\n")
+    out = r.stdout + r.stderr
+    assert r.returncode == 0 and "does not start with sk_" in out and "THE_KEY_ID" not in out
+    r = run(box, "key-check", env_file_text="ELEVENLABS_API_KEY=sk_looks_right\n")
+    assert "does not start with sk_" not in r.stdout and "looks_right" not in r.stdout
+    r = run(box, "key-check", env_file_text="ELEVENLABS_API_KEY=\n", keychain="idonly_KC_VALUE")
+    assert "does not start with sk_" in r.stdout and "KC_VALUE" not in r.stdout + r.stderr and "the Keychain" in r.stdout

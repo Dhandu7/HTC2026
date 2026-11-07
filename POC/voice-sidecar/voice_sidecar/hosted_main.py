@@ -31,7 +31,7 @@ import sys
 from typing import Optional
 
 from .auth import DevAuth, JwtAuth
-from .elevenlabs import DEFAULT_BASE_URL, ElevenLabsClient
+from .elevenlabs import DEFAULT_BASE_URL, ElevenLabsClient, key_shape_warning
 from .hosted import HostedConfig, HostedVoiceService
 from .hosted_app import create_hosted_app
 from .records import DynamoRecordStore, MemoryRecordStore
@@ -40,6 +40,14 @@ LOOPBACK = ("127.0.0.1", "localhost", "::1")
 
 
 def load_api_key(env=os.environ, secrets_client=None) -> str:
+    key = _read_api_key(env, secrets_client)
+    warn = key_shape_warning(key)
+    if warn:
+        print(f"[hosted-voice] WARNING: {warn}", file=sys.stderr, flush=True)  # the value itself is never printed
+    return key
+
+
+def _read_api_key(env=os.environ, secrets_client=None) -> str:
     if env.get("ELEVENLABS_API_KEY"):
         return env["ELEVENLABS_API_KEY"]
     sid = env.get("ELEVENLABS_SECRET_ID")
@@ -99,6 +107,7 @@ def check_config(env=os.environ) -> dict:
         "table": env.get("VOICE_TABLE_NAME"),
         "region": env.get("AWS_REGION"),
         "elevenlabs_key_source": "ELEVENLABS_API_KEY" if env.get("ELEVENLABS_API_KEY") else ("secrets-manager" if env.get("ELEVENLABS_SECRET_ID") else None),
+        "elevenlabs_key_looks_like_a_key": (key_shape_warning(env["ELEVENLABS_API_KEY"]) is None) if env.get("ELEVENLABS_API_KEY") else None,
         "elevenlabs_base_url": env.get("ELEVENLABS_BASE_URL", DEFAULT_BASE_URL),
         "model": env.get("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5"),
         "slot_limit": int(env.get("VOICE_SLOT_LIMIT", "10")),
