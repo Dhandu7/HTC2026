@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Helper for the hosted (ElevenLabs + DynamoDB) voice service.
 #   ./hosted.sh setup     create .venv-hosted (Python 3.12) and install the light requirements
-#   .env                  paste ELEVENLABS_API_KEY=... into the .env file here (git ignores it), or:
+#   POC/.env              paste ELEVENLABS_API_KEY=... into POC/.env, shared with the Node server (git ignores it), or:
 #   ./hosted.sh key-set   store your ElevenLabs key in the macOS Keychain (prompts; never shown)
 #   ./hosted.sh key-check / key-delete
 #   ./hosted.sh doctor    is the key accepted, does the plan allow cloning, how many voice slots are free? (read-only)
@@ -16,9 +16,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 PY="${VOICE_PY:-.venv-hosted/bin/python}"   # VOICE_PY exists so the tests can stand in for Python
 
-# --- the ElevenLabs key: from your environment, else the .env file in this folder, else the macOS Keychain ---
-# It is never printed, never put on a command line, and the .env file is ignored by git.
-ENV_FILE="${VOICE_ENV_FILE:-.env}"
+# --- the ElevenLabs key: from your environment, else POC/.env (one folder up), else the macOS Keychain ---
+# It is never printed, never put on a command line, and the .env file is ignored by git. Only ELEVENLABS_API_KEY is read.
+ENV_FILE="${VOICE_ENV_FILE:-../.env}"   # POC/.env, the same file the Node server reads
 KEY_SERVICE="vocaleyes-elevenlabs-api-key"
 have_keychain() { command -v security >/dev/null 2>&1; }
 # The value of one variable from the .env file. The file is READ, never run as a script.

@@ -11,35 +11,75 @@ export interface SelectorOutput {
   target: string | null;
 }
 
-/** Classic dwell: hold gaze on a target for `dwellMs`. Re-arms after leaving or a refractory gap. */
+/**
+ * Classic dwell: hold gaze on a target for `dwellMs`. Re-arms after a refractory gap.
+ *
+ * Webcam gaze flickers: the estimate often slips off a key (or onto a neighbour) for a frame
+ * or two. Leaving for less than `graceMs` only pauses the fill instead of restarting it; the
+ * fill never advances while the gaze is elsewhere, so a key can't fire when you're not on it.
+ * A real move (away for `graceMs` or more) switches target, and the new key's fill counts
+ * from when the gaze first arrived there.
+ */
 export class DwellSelector {
   private current: string | null = null;
   private since = 0;
   private firedAt = -Infinity;
+  /** When the gaze left `current` (null while on it). */
+  private awayFrom: number | null = null;
+  private pending: string | null = null;
+  private pendingSince = 0;
+
   constructor(
     public dwellMs = 800,
     public refractoryMs = 400,
+    public graceMs = 200,
   ) {}
 
+  private progressAt(t: number): number {
+    const start = Math.max(this.since, this.firedAt + this.refractoryMs);
+    return Math.max(0, Math.min(1, (t - start) / this.dwellMs));
+  }
+
   update(t: number, target: string | null): SelectorOutput {
-    if (target !== this.current) {
+    if (target === this.current) {
+      if (this.awayFrom !== null) {
+        this.since += t - this.awayFrom; // pause the fill for the time spent away
+        this.awayFrom = null;
+        this.pending = null;
+      }
+    } else if (this.current === null) {
       this.current = target;
       this.since = t;
+    } else {
+      if (this.awayFrom === null) this.awayFrom = t;
+      if (target !== this.pending) {
+        this.pending = target;
+        this.pendingSince = t;
+      }
+      if (t - this.awayFrom < this.graceMs) {
+        // Brief slip: keep showing the current key's fill, frozen where it was.
+        return { selected: null, progress: this.progressAt(this.awayFrom), target: this.current };
+      }
+      this.current = target;
+      this.since = this.pendingSince;
+      this.awayFrom = null;
+      this.pending = null;
     }
-    if (!target) return { selected: null, progress: 0, target: null };
-    const start = Math.max(this.since, this.firedAt + this.refractoryMs);
-    const progress = Math.max(0, Math.min(1, (t - start) / this.dwellMs));
+    if (!this.current) return { selected: null, progress: 0, target: null };
+    const progress = this.progressAt(t);
     if (progress >= 1) {
       this.firedAt = t;
       this.since = t;
-      return { selected: target, progress: 1, target };
+      return { selected: this.current, progress: 1, target: this.current };
     }
-    return { selected: null, progress, target };
+    return { selected: null, progress, target: this.current };
   }
 
   reset() {
     this.current = null;
     this.firedAt = -Infinity;
+    this.awayFrom = null;
+    this.pending = null;
   }
 }
 

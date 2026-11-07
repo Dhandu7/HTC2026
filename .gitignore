@@ -10,3 +10,5 @@ __pycache__/
 *.pyc
 .pytest_cache/
 POC/voice-sidecar/.venv-hosted/
+POC/recordings/
+*.webm

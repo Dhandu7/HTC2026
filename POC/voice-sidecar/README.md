@@ -18,7 +18,7 @@ Why the local engines (OpenVoice, Chatterbox) were dropped, with the measurement
 ./hosted.sh dev          # then, in another terminal:  cd POC && npm run dev   and open the app's "🗣 My voice" button
 
 # your ElevenLabs key: put it in ONE of these places (the scripts look in this order)
-#   1. the .env file in this folder: open it, paste after ELEVENLABS_API_KEY=, save (git ignores it)
+#   1. POC/.env (one folder up, the same file the Node server reads): paste after ELEVENLABS_API_KEY=, save (git ignores it)
 #   2. the macOS Keychain:   ./hosted.sh key-set      (prompts; nothing is shown)
 ./hosted.sh key-check    # says where a key was found, never shows it
 # local development against the real ElevenLabs, in memory, with a test login:
@@ -31,7 +31,7 @@ VOICE_TABLE_NAME=... ./hosted.sh check-table                    # lifecycle chec
 ./hosted.sh config                                              # effective configuration, never a secret value
 ```
 
-**Never paste the ElevenLabs key into a chat, type it after `export` in a terminal (that lands in your shell history), or commit it.** Put it in `.env` (copy of `.env.example`; git ignores `.env`, and it is created with owner-only permissions) or use `./hosted.sh key-set`. The `.env` file is read as text and never run as a script, and only `ELEVENLABS_API_KEY` is read from it. In AWS it comes from Secrets Manager (`ELEVENLABS_SECRET_ID`). If a key ever does leak, rotate it in the ElevenLabs dashboard. Every configuration variable is
+**Never paste the ElevenLabs key into a chat, type it after `export` in a terminal (that lands in your shell history), or commit it.** Put it in `POC/.env` (copy of `POC/.env.example`; git ignores `.env`; keep it owner-only with `chmod 600`) or use `./hosted.sh key-set`. The `.env` file is read as text and never run as a script, and this service reads only `ELEVENLABS_API_KEY` from it (the Node server reads the rest). In AWS it comes from Secrets Manager (`ELEVENLABS_SECRET_ID`). If a key ever does leak, rotate it in the ElevenLabs dashboard. Every configuration variable is
 documented at the top of [`voice_sidecar/hosted_main.py`](voice_sidecar/hosted_main.py) and in the handoff.
 
 ## API

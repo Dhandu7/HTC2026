@@ -54,11 +54,28 @@ webcam ─► MediaPipe Face Landmarker (478 landmarks + blendshapes + head pose
 | Accuracy units | `src/gaze/accuracy.ts` | Converts px to degrees. Viewing distance is estimated from iris size (11.7 mm) and can be overridden. |
 | Selection | `src/input/selection.ts` | **Dwell** (700 ms on GazeType, 1000 ms on the baseline). **Deliberate blink** (dwell-free) needs both eyes closed for 350–1500 ms after aiming for at least 150 ms. Involuntary blinks are **counted and reported**, not hidden. |
 | Keyboard | `src/ui/keyboards.ts` | GazeType has **16 targets in a 4×4 grid**: 4 prediction chips, 8 letter-group keys, delete, accept, phrases/expand, and done. The baseline is a dwell QWERTY. |
-| Prediction | `src/predict/engine.ts` | Decodes ambiguous letter-group keys, completes words, predicts the next word from a personal bigram model, and keeps a **personal phrase store** that learns every sentence you speak or insert. **Abbreviation expansion** turns one key per word into a full sentence. |
-| LLM (optional) | `server/llm.ts` | Claude via a local proxy with structured output. Only text is sent, never video. Results are re-checked locally against the typed pattern. A 6 s timeout means typing never waits on it. |
+| Prediction | `src/predict/engine.ts` | Decodes ambiguous letter-group keys through a **key-sequence index** (one bucket lookup per key, ~0.4 ms), completes words, and predicts the next word from personal **trigram → bigram** context. Personal and global frequencies are blended, with the personal share growing as the user talks; personal words decay over 30 days; a suggestion picked and deleted within 2 s is ranked lower in that context. Keeps a **personal phrase store** that learns every sentence you speak or insert. **Abbreviation expansion** turns one key per word into a full sentence. |
+| Profiles | `src/profile/profiles.ts` | Each user has separate words, phrases and calibration. A caregiver can add **people's names** (pinned, keep their capitals), an **about** note, and **writing samples** (pasted text or a .txt file) that give prediction a head start. Switch user by gaze from **☰ Done → 👤 Switch user**. Export/import a profile as JSON. All on-device. |
+| LLM (optional) | `server/llm.ts` | Claude via a local proxy with structured output. Live sentence chips use a fast model (`GAZETYPE_FAST_MODEL`, default `claude-haiku-5-5`, no thinking); the abbreviation-expansion panel uses `GAZETYPE_MODEL` (default `claude-opus-5-5`). The profile goes in a cached system block so suggestions match the user's style. Requests are debounced 150 ms, cancelled when the text changes, cached by typed text, and time out after 2.5 s (6 s for expansion). Only text is sent, never video. |
+| Voice (optional) | `server/elevenlabs.ts`, `src/voice/elevenlabsVoice.ts` | Set `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID` to speak in the user's cloned voice; falls back to the system voice. See [docs/ELEVENLABS_VOICE.md](docs/ELEVENLABS_VOICE.md). |
 | Metrics | `src/metrics/session.ts` | WPM ((T−1)/5), selections per character, minimum-string-distance error, and likely false selections (an undo within 2 s). |
 | Overlay | `electron/main.mjs` | Transparent, click-through when collapsed, non-focusable so the target app keeps focus. Global shortcut, tray menu, and paste via the OS. |
 | Voice | `src/input/voice.ts` | Vosk wasm with a fixed grammar ("gaze type", "open/hide keyboard", "read it out"). Works offline, and other speech can't trigger it. |
+
+### Recording and replaying gaze sessions (offline evaluation)
+
+Every tracking change is judged on the same recorded data, not on a fresh live run.
+
+1. Start with the camera, then press **● Record**. Fill in participant, glasses, lighting and (ideally) a tape-measured eye-to-screen distance.
+   - **Full (team), about 12 min:** 25-point grid, 16 validation points, then the validation points again at +2, +5 and +10 min to measure drift. Stay seated between checks.
+   - **Short (stranger), about 1 min:** the app's 9 calibration points plus the 16 validation points.
+2. The browser downloads `gazesession-<id>-<time>.json` (raw landmarks, blendshapes and head pose per frame, about 50 MB for a full session) and, if ticked, a local `.webm` video. Move them to `POC/recordings/`, which git ignores.
+3. Run `npm run replay -- recordings/*.json` (add `--json results.json` to save the rows). It prints:
+   - **Personal:** each calibration set (25/9/5 points) × ridge λ (0.1/1/10/100), scored on the validation points. `ridge λ=1 (app)` on `9pt` is what the app does today.
+   - **Drift:** one calibration scored at +0, +2, +5 and +10 min.
+   - **Pooled (needs 2+ participants):** leave one participant out. Prior trained on everyone else vs. personal 9/5 points vs. prior + offset vs. prior + fine-tune.
+
+Accuracy (offset of the mean gaze from the target, with x and y separately) and precision (SD and RMS sample-to-sample) are reported separately, in degrees. Hit rate is the share of frames inside a cell-sized box centred on the target, for a 6-chip (3×2) and a 16-grid (4×4) layout. Degrees use the measured distance, or the iris-size estimate if none was entered. Replay scores raw predictions, without the One Euro filter, like the app's validation step.
 
 ### Why a 4×4 grid of letter groups and not QWERTY
 

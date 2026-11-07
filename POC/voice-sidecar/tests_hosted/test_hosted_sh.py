@@ -109,14 +109,14 @@ def test_a_missing_env_file_is_fine(box):
 
 def test_the_real_env_files_are_set_up_safely():
     """The .env example holds no key, and a real .env (if present) is ignored by git."""
-    example = (SIDECAR / ".env.example").read_text()
+    example = (SIDECAR.parent / ".env.example").read_text()
     assert "ELEVENLABS_API_KEY=\n" in example
     assert not any(l.split("=", 1)[1].strip() for l in example.splitlines() if l.startswith("ELEVENLABS_API_KEY="))
-    r = subprocess.run(["git", "check-ignore", "-q", ".env"], cwd=SIDECAR)
+    r = subprocess.run(["git", "check-ignore", "-q", ".env"], cwd=SIDECAR.parent)
     assert r.returncode == 0, ".env must be ignored by git"
-    r = subprocess.run(["git", "check-ignore", "-q", ".env.example"], cwd=SIDECAR)
+    r = subprocess.run(["git", "check-ignore", "-q", ".env.example"], cwd=SIDECAR.parent)
     assert r.returncode == 1, ".env.example must stay trackable"
-    real = SIDECAR / ".env"
+    real = SIDECAR.parent / ".env"
     if real.exists():
         assert stat.S_IMODE(real.stat().st_mode) & 0o077 == 0, ".env must not be readable by other users"
 
