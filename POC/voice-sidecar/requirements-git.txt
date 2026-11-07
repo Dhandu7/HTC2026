@@ -1,0 +1,4 @@
+# Installed with --no-deps: OpenVoice's own requirements pin Gradio and old numpy, which conflict with the
+# set in requirements.spike.txt (the spike ran with exactly these versions and worked).
+myshell-openvoice @ git+https://github.com/myshell-ai/OpenVoice.git@74a1d147b17a8c3092dd5430504bd83ef6c7eb23
+melotts @ git+https://github.com/myshell-ai/MeloTTS.git@209145371cff8fc3bd60d7be902ea69cbdb7965a

@@ -1,11 +1,10 @@
 # Exact versions the OpenVoice V2 spike ran with (7 Nov 2026, Python 3.9.6, macOS arm64).
-# Install: uv pip install -r requirements.spike.txt   (use a Python 3.9 venv; 3.14 does not work)
+# Install: uv pip install -r requirements.spike.txt, then uv pip install --no-deps -r requirements-git.txt
+#          (use a Python 3.9 venv; 3.14 does not work). setup.sh does both.
 # Then:    python -m unidic download            (~526 MB Japanese dictionary MeloTTS needs at import)
 #          python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng')"
 # Weights: converter/checkpoint.pth + converter/config.json + base_speakers/ses/en-us.pth
 #          from https://huggingface.co/myshell-ai/OpenVoiceV2 (MeloTTS downloads its own on first use).
-myshell-openvoice @ git+https://github.com/myshell-ai/OpenVoice.git@74a1d147b17a8c3092dd5430504bd83ef6c7eb23
-melotts @ git+https://github.com/myshell-ai/MeloTTS.git@209145371cff8fc3bd60d7be902ea69cbdb7965a
 annotated-doc==0.0.5
 annotated-types==0.7.0
 anyascii==0.3.2

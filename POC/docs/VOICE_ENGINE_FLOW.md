@@ -39,6 +39,8 @@ What this says:
 - **Emotion and accent style control are not exposed in V2's API.** The model card advertises "flexible voice style control", but the code exposes only `speed`, `sdp_ratio`, `noise_scale` and `noise_scale_w` on the base TTS and `tau` on the converter. Accent comes from picking the base speaker (EN-US, EN-BR, EN-AU, EN_INDIA, EN-Default). So `delivery` is pace only, as the LLM doc already assumes.
 - **Voice quality was not assessed.** I can't listen to audio. Someone needs to play the clips and judge whether the clone sounds like the reference. Sample files from this run are in the session scratchpad and are not committed.
 
+**Through the sidecar, and under load.** Rendered over HTTP with the real engine, warm, on the same Mac: about 1.5 s for short phrases and 3.8 s for a 70-character sentence. The machine was busy (iCloud sync using a lot of CPU after the 2.2 GB environment was created in `~/Documents`); rerunning the spike script at that moment gave 1.56 s and 2.2 s p50 for short and longer phrases, so the sidecar adds no measurable overhead and the earlier, quiet-machine numbers above (0.75 s and 1.4 s) are the better estimate of the best case. Real timing needs a quiet machine.
+
 Licenses read (not legal advice): OpenVoice code MIT, MeloTTS code MIT, OpenVoice V2 weights MIT (Hugging Face model card), MeloTTS-English weights MIT, `bert-base-uncased` Apache-2.0. **Not yet checked:** the other BERT models MeloTTS downloads (it loads one per language at import), UniDic, `wavmark` (watermarking), and the NLTK data. Read those before shipping.
 
 Install gotchas found (all handled in the spike script or notes):
@@ -141,12 +143,21 @@ A chip that finished rendering before the dwell completes plays as T1. Dwell is 
 
 Bound to `127.0.0.1`. Electron main generates a random token at launch and passes it to the sidecar and the renderer. Requests without it get 401.
 
+Built in `POC/voice-sidecar/` (README there). The contract grew from the first sketch: profiles are explicit resources, and consent is part of creating one.
+
 | Endpoint | Purpose |
 |---|---|
-| `GET /health` | `{ok, engine, device, warm}` |
-| `POST /v1/profile` | multipart clips → `{embeddingId}`; writes the embedding under `userData` |
-| `POST /v1/synthesize` | `{text, embeddingId, pace?, language?}` → `audio/wav` (PCM16 mono; sample rate declared in a header) |
-| `DELETE /v1/profile/:id` | removes the embedding |
+| `GET /health` (open) | `{ok, engine, device, warm}` |
+| `GET /ui` (open, no data) | Browser page to record or upload clips, build and test a voice |
+| `POST /v1/profiles` | `{consent:{mode, acknowledged, authorizedBy?}}` → `{profileId}`. Refused without acknowledgement |
+| `GET /v1/profiles/{id}` | Clips with quality reports, built?, paused?, consent |
+| `POST /v1/profiles/{id}/clips` | Upload one clip. Rejected with a reason if too short, too quiet, clipped or silent |
+| `POST /v1/profiles/{id}/build` | Train the voice embedding from the clips |
+| `POST /v1/synthesize` | `{profileId, text, pace?, tau?, raw?}` → `audio/wav`, labelled `X-Ai-Assisted: true` |
+| `PATCH` / `DELETE /v1/profiles/{id}` | Pause or resume; permanent delete of clips, embedding and consent record |
+| `GET /v1/profiles/{id}/export`, `GET`/`DELETE …/clips/{name}` | Export zip; audition or remove a clip |
+
+Everything except `/health` and `/ui` needs the token.
 
 The renderer never sees the embedding file. The sidecar starts on app launch, warms the model with one tiny render, and is restarted by Electron main if `/health` fails.
 
@@ -218,11 +229,11 @@ Steps 1–4 and 7 give a safe demo: real-voice phrases, system-voice fallback, n
 | Step | State |
 |---|---|
 | 1 Spike (OpenVoice install, timings, licence check) | **Done on one machine** (M5 laptop): results above. Still open: listening test, a weaker machine, watermark on, licenses of the remaining dependencies |
-| 2 Sidecar and `electron/sidecar.mjs` | Not started |
+| 2 Sidecar and `electron/sidecar.mjs` | **Sidecar done** (`voice-sidecar/`, 33 tests, real-model run over HTTP verified on a synthetic test voice). `electron/sidecar.mjs` (spawn, token, health, restart) not started |
 | 3 `provider.ts`, `system.ts`, `pcmPlayer.ts`, `speak()` refactor | **Done.** `speak()` goes through `VoiceRouter` with the system voice registered, so behaviour is unchanged |
 | 4 `clips.ts` | Matcher and `RecordedClipVoice` done and tested. Recording UI, quality checks and clip storage not started |
 | 5 `consent.ts` | Consent record, profile store and tier policy done and tested. Onboarding screens not started |
-| 6 `openvoice.ts`, profile build, audition | Not started (needs the sidecar) |
+| 6 `openvoice.ts`, profile build, audition | Profile build and audition work in the sidecar's browser page and CLI. **Not yet judged on a real person's voice.** `src/voice/openvoice.ts` (the app-side client) not started |
 | 7 `router.ts` | **Done**, with tests for tier order, budgets, mid-play failure, cancel and policy |
 | 8–10 Cache, pre-render, management UI, metrics | Not started |
 

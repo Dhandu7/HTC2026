@@ -78,7 +78,7 @@ def main():
     ap.add_argument("--ref", required=True, help="reference voice WAV (the voice to clone)")
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--device", default="cpu", choices=["cpu", "mps"])
+    ap.add_argument("--device", default="cpu", choices=["cpu", "mps", "cuda"])
     ap.add_argument("--watermark", action="store_true", help="enable OpenVoice's wavmark watermark")
     ap.add_argument("--rounds", type=int, default=3, help="warm passes over the phrase list")
     a = ap.parse_args()
