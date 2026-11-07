@@ -1,5 +1,8 @@
 # Handoff: running the OpenVoice voice engine on AWS (GPU)
 
+> **SUPERSEDED (7 Nov 2026).** The team is using ElevenLabs on its own servers, so there is no model to host on an EC2 GPU. The AWS work is now a DynamoDB table, a secret and an API: see `AWS_VOICE_HANDOFF.md`. This file is kept only as history; its privacy points still apply.
+
+
 For: the teammate taking the hosted voice component. Written 7 Nov 2026. Branch: `voice/openvoice-engine`.
 Read first: [`VOICE_ENGINE_FLOW.md`](VOICE_ENGINE_FLOW.md) (design, spike numbers) and [`../voice-sidecar/README.md`](../voice-sidecar/README.md) (how to run it).
 

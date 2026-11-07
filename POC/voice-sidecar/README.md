@@ -1,5 +1,33 @@
 # Voice sidecar
 
+> **Direction (7 Nov 2026): hosted voice with ElevenLabs, per-user records in DynamoDB.** The OpenVoice and Chatterbox
+> engines described further down were dropped (their environments are uninstalled) and are kept in the code only until
+> someone confirms they can be removed. Do not run `./setup.sh`; it would reinstall the heavy model stack.
+
+## Hosted voice (ElevenLabs + DynamoDB)
+
+ElevenLabs clones and speaks; this service keeps what ElevenLabs does not know: which user owns which voice, their
+consent, settings and lifecycle, and the account's voice-slot cap. AWS side and decisions: [`../docs/AWS_VOICE_HANDOFF.md`](../docs/AWS_VOICE_HANDOFF.md).
+
+```bash
+./hosted.sh setup        # .venv-hosted, Python 3.12, about 160 MB
+./hosted.sh test         # 118 tests; no AWS account and no ElevenLabs key needed
+# local development, in memory, no login (dev auth only works on loopback):
+VOICE_STORE=memory AUTH_MODE=dev ELEVENLABS_API_KEY=... ./hosted.sh serve
+./hosted.sh smoke --clip my-voice.wav --i-am-the-voice-owner     # live ElevenLabs check with YOUR key
+VOICE_TABLE_NAME=... ./hosted.sh check-table                      # lifecycle check against the real DynamoDB table
+```
+
+Never paste the ElevenLabs key into a chat or commit it. Set `ELEVENLABS_API_KEY` in your shell for local work; in AWS it comes from Secrets Manager.
+Configuration variables are listed in [`voice_sidecar/hosted_main.py`](voice_sidecar/hosted_main.py) and the handoff doc.
+
+Rules the service enforces: no voice without consent (including that recordings and text go to ElevenLabs); a user can only reach their own voice (identity comes from a verified token); a failed create frees its slot; a delete completes only after ElevenLabs confirms; recordings are not kept; request text is never logged.
+
+---
+
+# Legacy: local engines (OpenVoice, Chatterbox)
+
+
 A small local service that builds a voice from your own recordings and speaks text in it, using
 [OpenVoice V2](https://github.com/myshell-ai/OpenVoice) (MIT). It runs on your computer and
 listens on `127.0.0.1` only. Design and measurements: [`../docs/VOICE_ENGINE_FLOW.md`](../docs/VOICE_ENGINE_FLOW.md).
