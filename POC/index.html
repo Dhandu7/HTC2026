@@ -14,6 +14,7 @@
           <button id="bench-btn" type="button">⏱ Benchmark</button>
           <button id="results-btn" type="button">📊 Results</button>
           <button id="recal" type="button">◎ Calibrate</button>
+          <button id="record-btn" type="button" title="Record a gaze session for offline evaluation">● Record</button>
           <button id="settings-btn" type="button">⚙</button>
         </nav>
       </header>
@@ -62,6 +63,26 @@
         <label><input name="hotCorner" type="checkbox" /> Overlay: open by looking at top-right corner</label>
         <label><input name="voice" type="checkbox" /> Offline voice commands (“gaze type”, “hide keyboard”)</label>
         <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Save</button></menu>
+      </form>
+    </dialog>
+
+    <dialog id="record">
+      <form method="dialog">
+        <h2>Record a gaze session</h2>
+        <p class="fine">Saves raw face landmarks (and optionally video) to this machine for offline evaluation. Nothing is uploaded.</p>
+        <label>Participant ID <input name="participant" required placeholder="e.g. derek" /></label>
+        <label>Protocol
+          <select name="mode">
+            <option value="full">Full (team): 25-pt grid + 16 validation + drift checks at 2/5/10 min, ~12 min</option>
+            <option value="short">Short (stranger): 9-pt + 16 validation, ~1 min</option>
+          </select>
+        </label>
+        <label><input name="glasses" type="checkbox" /> Wearing glasses</label>
+        <label>Lighting <input name="lighting" placeholder="e.g. office overhead, window behind" /></label>
+        <label>Measured eye-to-screen distance (cm, 0 = not measured) <input name="distanceCm" type="number" min="0" max="150" step="1" value="0" /></label>
+        <label><input name="video" type="checkbox" checked /> Also save local video (participant consents)</label>
+        <label>Notes <input name="notes" /></label>
+        <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Start</button></menu>
       </form>
     </dialog>
 

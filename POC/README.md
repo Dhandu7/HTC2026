@@ -60,6 +60,21 @@ webcam ─► MediaPipe Face Landmarker (478 landmarks + blendshapes + head pose
 | Overlay | `electron/main.mjs` | Transparent, click-through when collapsed, non-focusable so the target app keeps focus. Global shortcut, tray menu, and paste via the OS. |
 | Voice | `src/input/voice.ts` | Vosk wasm with a fixed grammar ("gaze type", "open/hide keyboard", "read it out"). Works offline, and other speech can't trigger it. |
 
+### Recording and replaying gaze sessions (offline evaluation)
+
+Every tracking change is judged on the same recorded data, not on a fresh live run.
+
+1. Start with the camera, then press **● Record**. Fill in participant, glasses, lighting and (ideally) a tape-measured eye-to-screen distance.
+   - **Full (team), about 12 min:** 25-point grid, 16 validation points, then the validation points again at +2, +5 and +10 min to measure drift. Stay seated between checks.
+   - **Short (stranger), about 1 min:** the app's 9 calibration points plus the 16 validation points.
+2. The browser downloads `gazesession-<id>-<time>.json` (raw landmarks, blendshapes and head pose per frame, about 50 MB for a full session) and, if ticked, a local `.webm` video. Move them to `POC/recordings/`, which git ignores.
+3. Run `npm run replay -- recordings/*.json` (add `--json results.json` to save the rows). It prints:
+   - **Personal:** each calibration set (25/9/5 points) × ridge λ (0.1/1/10/100), scored on the validation points. `ridge λ=1 (app)` on `9pt` is what the app does today.
+   - **Drift:** one calibration scored at +0, +2, +5 and +10 min.
+   - **Pooled (needs 2+ participants):** leave one participant out. Prior trained on everyone else vs. personal 9/5 points vs. prior + offset vs. prior + fine-tune.
+
+Accuracy (offset of the mean gaze from the target, with x and y separately) and precision (SD and RMS sample-to-sample) are reported separately, in degrees. Hit rate is the share of frames inside a cell-sized box centred on the target, for a 6-chip (3×2) and a 16-grid (4×4) layout. Degrees use the measured distance, or the iris-size estimate if none was entered. Replay scores raw predictions, without the One Euro filter, like the app's validation step.
+
 ### Why a 4×4 grid of letter groups and not QWERTY
 
 The best webcam gaze estimates have about 1.3–1.8° error. A typical student implementation gets 3° or more. At 60 cm, 3° is about 3.1 cm, so a 26-key QWERTY on a laptop screen can't be hit reliably. Sixteen large targets can. Prediction makes up for the ambiguous keys: one key press per letter, and usually 1–3 presses before the word appears as a chip. See [docs/RESEARCH.md](docs/RESEARCH.md).

@@ -3,3 +3,5 @@ node_modules
 .env
 dist/
 POC/public/mediapipe/
+POC/recordings/
+*.webm

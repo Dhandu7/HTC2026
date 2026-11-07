@@ -10,6 +10,8 @@ import { llmAvailable } from "./predict/llm";
 import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost } from "./ui/keyboards";
 import { TypingSession, normalizeText, type RunResult } from "./metrics/session";
 import { startVoiceCommands } from "./input/voice";
+import { recordSession } from "./record/recorder";
+import type { SessionMeta } from "./record/format";
 
 // ---------- Electron bridge (absent in the browser) ----------
 interface Bridge {
@@ -377,6 +379,40 @@ $("#kb-toggle").addEventListener("click", () => {
   render();
 });
 $("#recal").addEventListener("click", () => void calibrate());
+$("#record-btn").addEventListener("click", openRecord);
+
+// ---------- session recording (offline evaluation) ----------
+function openRecord() {
+  if (gaze.source !== "camera") {
+    showToast("Recording needs the camera. You're in mouse mode.");
+    return;
+  }
+  const dlg = $<HTMLDialogElement>("#record");
+  const form = dlg.querySelector("form")!;
+  dlg.onclose = async () => {
+    if (dlg.returnValue !== "ok") return;
+    const fd = new FormData(form);
+    const g = geometry();
+    const meta: SessionMeta = {
+      participant: String(fd.get("participant") ?? "").trim(),
+      mode: fd.get("mode") === "short" ? "short" : "full",
+      glasses: fd.get("glasses") === "on",
+      lighting: String(fd.get("lighting") ?? ""),
+      notes: String(fd.get("notes") ?? ""),
+      distanceCm: Number(fd.get("distanceCm")) || 0,
+      screenDiagonalIn: g.screenDiagonalIn,
+      hfovDeg: settings.hfovDeg,
+    };
+    const n = await recordSession(gaze, tracker, calRoot, { meta, video: fd.get("video") === "on" });
+    showToast(
+      n === null
+        ? "Recording cancelled before validation finished; nothing saved."
+        : `Saved session (${n} frames) to your Downloads. Move it to POC/recordings/ and run <code>npm run replay -- recordings/*.json</code>.`,
+      9000,
+    );
+  };
+  dlg.showModal();
+}
 $("#settings-btn").addEventListener("click", openSettings);
 $("#bench-btn").addEventListener("click", () => startRun(benchIndex));
 $("#results-btn").addEventListener("click", showResults);
