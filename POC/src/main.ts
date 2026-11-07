@@ -9,6 +9,8 @@ import { CORE_WORDS, SEED_PHRASES, BENCHMARK_SENTENCES } from "./predict/vocab";
 import { llmAvailable } from "./predict/llm";
 import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost } from "./ui/keyboards";
 import { TypingSession, normalizeText, type RunResult } from "./metrics/session";
+import { VoiceRouter } from "./voice/router";
+import { SystemVoice } from "./voice/system";
 import { startVoiceCommands } from "./input/voice";
 
 // ---------- Electron bridge (absent in the browser) ----------
@@ -268,10 +270,13 @@ function hotCorner(g: GazePoint) {
 }
 
 // ---------- actions ----------
+// Speaking goes through the voice router. Today only the system voice is registered, so
+// behaviour is unchanged; recorded-clip and cloned tiers plug in here (docs/VOICE_ENGINE_FLOW.md).
+const voice = new VoiceRouter({ providers: [new SystemVoice()] });
+
 function speak(text: string) {
   if (!text.trim()) return;
-  speechSynthesis.cancel();
-  speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  void voice.speak(text);
 }
 
 async function doAction(a: string) {

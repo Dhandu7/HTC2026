@@ -165,6 +165,21 @@ voice: {
 
 Steps 1–4 and 7 give a safe demo: real-voice phrases, system-voice fallback, nothing synthetic. Steps 5–6 and 8 add the cloned voice.
 
+## Progress (7 Nov 2026)
+
+| Step | State |
+|---|---|
+| 1 Spike (OpenVoice install, timings, licence check) | **Not started.** It means installing PyTorch and downloading model weights, so it needs an explicit go-ahead |
+| 2 Sidecar and `electron/sidecar.mjs` | Not started |
+| 3 `provider.ts`, `system.ts`, `pcmPlayer.ts`, `speak()` refactor | **Done.** `speak()` goes through `VoiceRouter` with the system voice registered, so behaviour is unchanged |
+| 4 `clips.ts` | Matcher and `RecordedClipVoice` done and tested. Recording UI, quality checks and clip storage not started |
+| 5 `consent.ts` | Consent record, profile store and tier policy done and tested. Onboarding screens not started |
+| 6 `openvoice.ts`, profile build, audition | Not started (needs the sidecar) |
+| 7 `router.ts` | **Done**, with tests for tier order, budgets, mid-play failure, cancel and policy |
+| 8–10 Cache, pre-render, management UI, metrics | Not started |
+
+Run `npm test` in `POC/`: 61 tests pass, `npm run typecheck` is clean.
+
 ## Verification
 
 - **Unit**: router tier order and every fallback, matcher normalization, cache key invalidation on re-record, consent gate.
