@@ -115,6 +115,14 @@ def test_unusable_clips_are_explained(env):
     assert store.slots_used() == 0 and fake.requests == []
 
 
+def test_a_large_file_and_an_unusual_name_are_accepted_up_to_the_limits(env, monkeypatch):
+    """Inputs are not limited to a list of types or to small files: the service decides by decoding."""
+    client, _, _ = env
+    r = create(client, files=[("files", ("my recording (final) v2.XYZ", speech(12.0), "application/octet-stream"))])
+    assert r.status_code == 201, r.text  # an odd extension and a generic content type do not matter
+    assert hosted_app.MAX_FILE_BYTES >= 100 * 1024 * 1024 and hosted_app.MAX_UPLOAD_BYTES >= 200 * 1024 * 1024
+
+
 def test_upload_limits(env, monkeypatch):
     client, store, fake = env
     monkeypatch.setattr(hosted_app, "MAX_FILE_BYTES", 1000)

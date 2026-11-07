@@ -29,8 +29,8 @@ from .hosted import CONSENT_TEXT, CONSENT_VERSION, ClipsRejected, HostedError, H
 from .records import RecordError
 
 MAX_FILES = 40
-MAX_FILE_BYTES = 25 * 1024 * 1024
-MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+MAX_FILE_BYTES = 100 * 1024 * 1024  # a long recording or a video file; only its first 30 minutes are decoded
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 
 class PatchIn(BaseModel):

@@ -23,7 +23,7 @@ const extensionFor = (mime: string): string => (mime.includes("webm") ? "webm" :
  * `maxSeconds` (and `onAutoStop` is called) so a forgotten recording cannot grow without limit.
  * Throws a message fit to show a person if the microphone cannot be used.
  */
-export async function startRecording(onLevel?: (level: number) => void, maxSeconds = 30, onAutoStop?: () => void): Promise<Recording> {
+export async function startRecording(onLevel?: (level: number) => void, maxSeconds = 180, onAutoStop?: () => void): Promise<Recording> {
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") throw new Error("This browser cannot record audio. Add audio files instead.");
   let stream: MediaStream;
   try {

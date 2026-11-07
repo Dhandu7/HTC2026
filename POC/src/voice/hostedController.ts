@@ -4,6 +4,7 @@
 // Phases: loading -> (unreachable | signed-out | none | ready | deleting). From `none`, create() goes through
 // `creating` to `ready`. Consent is checked here before anything is uploaded, and again by the service.
 
+import { MAX_FILES } from "./clipInput";
 import { HostedVoiceError, type ConsentText, type SkippedClip, type VoiceSettings, type VoiceStatus, type VoiceView, type HostedVoiceApi } from "./hostedApi";
 
 export type Phase = "loading" | "unreachable" | "signed-out" | "none" | "creating" | "ready" | "deleting";
@@ -141,7 +142,9 @@ export class HostedVoiceController {
             ? "Please enter the name of the voice owner who gave permission."
             : files.length === 0
               ? "Add at least one recording first."
-              : null;
+              : files.length > MAX_FILES
+                ? `Please use at most ${MAX_FILES} files.`
+                : null;
     if (problem) {
       this.set({ error: problem });
       return false;

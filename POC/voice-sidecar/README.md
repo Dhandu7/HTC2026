@@ -12,7 +12,7 @@ Why the local engines (OpenVoice, Chatterbox) were dropped, with the measurement
 
 ```bash
 ./hosted.sh setup        # .venv-hosted, Python 3.12, about 160 MB
-./hosted.sh test         # 189 tests; no AWS account and no ElevenLabs key needed
+./hosted.sh test         # 196 tests; no AWS account and no ElevenLabs key needed
 
 # try the app screens with NO key and no AWS: the service plus a fake ElevenLabs that makes tones, not speech
 ./hosted.sh dev          # then, in another terminal:  cd POC && npm run dev   and open the app's "🗣 My voice" button
@@ -54,6 +54,7 @@ DELETE /v1/me/voice               deletes at ElevenLabs, then here
 - **A failed create frees its slot** and does not leave an orphan voice; the account's slot cap is enforced atomically in DynamoDB.
 - **A voice ElevenLabs wants verified is not used until it is.** ElevenLabs requires the voice's owner to verify a cloned voice (reading a short phrase aloud on its website) before it will speak; the API cannot do that step. The service records `needsVerification`, tells the person exactly what to do, stops calling ElevenLabs for that voice, and clears the flag the first time a speak succeeds. Try it without a key: `FAKE_REQUIRE_VERIFICATION=1 ./hosted.sh dev`, then `curl -X POST http://127.0.0.1:8794/fake/verify-all`.
 - **A delete completes only after ElevenLabs confirms.** Until then the voice is silenced and marked `deleting`, and it is retried.
+- **Any input is accepted:** a recording made in the app (up to 3 minutes each) or any file, whatever its name or type. Up to 40 files, 100 MB per file, 200 MB per request; only the first 30 minutes of each file are decoded. Files that are not audio or video, or are unusable, are skipped and listed back to the person; they do not fail the request.
 - **Recordings are not kept:** clips are checked, uploaded and dropped; only length, loudness and warnings are stored.
 - **Request text, audio, tokens and the API key are never logged**, and error messages never echo them.
 - Tokens are verified (RS256 only, issuer, expiry, optional audience); `AUTH_MODE=dev` refuses to run off loopback.

@@ -94,6 +94,15 @@ describe("creating a voice", () => {
     expect(c.state.phase).toBe("none");
   });
 
+  it("refuses an unreasonable number of files before uploading anything", async () => {
+    const { c, calls } = setup();
+    await c.refresh();
+    const many = Array.from({ length: 41 }, (_, i) => ({ name: `f${i}.wav`, blob: new Blob(["x"]) }));
+    expect(await c.create(ALL_OK, many)).toBe(false);
+    expect(c.state.error).toMatch(/at most 40 files/);
+    expect(calls).not.toContain("createVoice");
+  });
+
   it("needs at least one recording, and the consent text to have loaded", async () => {
     const a = setup();
     await a.c.refresh();

@@ -145,3 +145,10 @@ body.overlay.collapsed #pill { cursor: pointer; }
 #myvoice input[type="range"] { flex: 1; max-width: 260px; }
 #myvoice .mv-verify { border-color: var(--accent-2); background: #2a2108; }
 #myvoice .mv-verify ol { margin: 8px 0 12px; padding-left: 22px; }
+#myvoice .mv-recbar { display: flex; align-items: center; gap: 12px; margin: 10px 0 4px; }
+#myvoice .mv-recbar button.rec { font-size: 18px; padding: 12px 22px; }
+#myvoice .mv-timer { color: var(--muted); font-variant-numeric: tabular-nums; }
+#myvoice .mv-ideas { margin: 8px 0; color: var(--muted); }
+#myvoice .mv-ideas summary { cursor: pointer; }
+#myvoice .mv-ideas ul { margin: 6px 0 0; padding-left: 20px; }
+#myvoice .mv-fname { word-break: break-all; }

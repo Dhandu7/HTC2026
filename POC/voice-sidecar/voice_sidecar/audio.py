@@ -15,6 +15,9 @@ import numpy as np
 import soundfile as sf
 
 FRAME_S = 0.02
+#: How much of one file is decoded. A voice uses at most a few minutes of speech, so reading an hour-long recording
+#: whole would only cost memory. Anything past this is ignored.
+MAX_DECODE_SECONDS = 1800.0
 SILENCE_DB = -50.0  # frames quieter than this count as silence
 
 
@@ -44,7 +47,7 @@ class ClipReport:
         return d
 
 
-def _load_with_av(data: bytes) -> tuple[np.ndarray, int]:
+def _load_with_av(data: bytes, max_seconds: float = MAX_DECODE_SECONDS) -> tuple[np.ndarray, int]:
     """Decode anything ffmpeg can read (M4A, MP4, WebM, AAC, Opus, ...) via PyAV, to mono float32."""
     import av  # optional dependency; soundfile covers WAV, FLAC, OGG and MP3 without it
 
@@ -54,35 +57,44 @@ def _load_with_av(data: bytes) -> tuple[np.ndarray, int]:
             raise AudioError("no audio track found in this file")
         rate = int(stream.rate or 44100)
         resampler = av.AudioResampler(format="flt", layout="mono", rate=rate)
-        parts = []
+        parts, have, limit = [], 0, int(max_seconds * rate)
         for frame in container.decode(stream):
             for out in resampler.resample(frame):
+                chunk = out.to_ndarray().reshape(-1)
+                parts.append(chunk)
+                have += len(chunk)
+            if have >= limit:
+                break
+        else:
+            for out in resampler.resample(None):
                 parts.append(out.to_ndarray().reshape(-1))
-        for out in resampler.resample(None):
-            parts.append(out.to_ndarray().reshape(-1))
     if not parts:
         raise AudioError("audio file is empty")
-    return np.concatenate(parts).astype(np.float32), rate
+    return np.concatenate(parts)[:limit].astype(np.float32), rate
 
 
-def load_audio(data: bytes) -> tuple[np.ndarray, int]:
-    """Decode an uploaded file to mono float32 in [-1, 1].
+def load_audio(data: bytes, max_seconds: float = MAX_DECODE_SECONDS) -> tuple[np.ndarray, int]:
+    """Decode an uploaded file to mono float32 in [-1, 1], reading at most `max_seconds` of it.
 
     soundfile first (WAV, FLAC, OGG, MP3); PyAV/ffmpeg as the fallback for everything else
     (M4A, MP4 video, WebM, AAC, Opus), so "any clip I already have" works.
     """
     try:
-        audio, sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=True)
+        with sf.SoundFile(io.BytesIO(data)) as f:
+            frames = int(min(f.frames, max_seconds * f.samplerate)) if f.frames > 0 else -1
+            audio = f.read(frames, dtype="float32", always_2d=True)
+            sr = f.samplerate
         mono, rate = audio.mean(axis=1), int(sr)
     except Exception as first:
         try:
-            mono, rate = _load_with_av(data)
+            mono, rate = _load_with_av(data, max_seconds)
         except AudioError:
             raise
         except ImportError:
             raise AudioError(f"could not read this audio format ({first}); install PyAV (pip install av) or send WAV")
         except Exception as second:
-            raise AudioError(f"could not read this file as audio: {second}") from second
+            # The decoder's own message is noise to a person ("Invalid data found ... '<none>'"), so keep it out.
+            raise AudioError("this does not look like audio or video, so it was skipped") from second
     if mono.size == 0:
         raise AudioError("audio file is empty")
     if not np.isfinite(mono).all():

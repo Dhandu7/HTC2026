@@ -35,7 +35,7 @@ Read on 7 Nov 2026 from their docs and help center; re-check before relying on t
 
 ## 3. What is built and tested (application side)
 
-All in `POC/voice-sidecar/`. `./hosted.sh setup` then `./hosted.sh test` runs **189 tests with no AWS account and no ElevenLabs key**.
+All in `POC/voice-sidecar/`. `./hosted.sh setup` then `./hosted.sh test` runs **196 tests with no AWS account and no ElevenLabs key**.
 
 | Piece | File | Notes |
 |---|---|---|
@@ -75,7 +75,7 @@ Each item has a check so you and I can agree when it is done.
 
 1. **The DynamoDB table.** Start from `infra/voices-table.cfn.json` (CloudFormation JSON; port it to CDK or Terraform if that is the team's standard). On-demand billing, point-in-time recovery, encryption, deletion protection, TTL on `ttl`, one GSI `gsi1`. *Check:* `VOICE_TABLE_NAME=... ./hosted.sh check-table` prints every step `ok`.
 2. **The ElevenLabs API key in Secrets Manager.** Suggested name `vocaleyes/elevenlabs-api-key`, value `{"api_key": "..."}` (a plain string also works). The app reads it by `ELEVENLABS_SECRET_ID`. **The key must never appear in chat, in the repo, in CloudFormation parameters or in logs.** If ElevenLabs lets you scope the key, limit it to text-to-speech and voices (I did not verify that option exists). Decide a rotation routine. *Check:* `./hosted.sh serve` starts with only `ELEVENLABS_SECRET_ID` set.
-3. **Compute for the API.** The app is a FastAPI service. Options, none chosen: (a) a container on App Runner or ECS Fargate behind HTTPS runs it unchanged and is the least work; (b) Lambda behind API Gateway or a function URL works but needs an adapter that is not in the repo, and you should check current payload, timeout and streaming limits against uploads of a few MB and speech responses; (c) EC2, which I would avoid for this. Whatever you pick must run `python -m voice_sidecar.hosted_main serve`, with the environment from section 5, and a second scheduled task for `python -m voice_sidecar.hosted_main reconcile` every few minutes (EventBridge Scheduler is the obvious fit).
+3. **Compute for the API.** The app is a FastAPI service. Options, none chosen: (a) a container on App Runner or ECS Fargate behind HTTPS runs it unchanged and is the least work; (b) Lambda behind API Gateway or a function URL works but needs an adapter that is not in the repo, and you should check current payload, timeout and streaming limits against speech responses and against uploads: onboarding now accepts up to 200 MB per request (100 MB per file), which is far above API Gateway's and Lambda's request-size limits, so a Lambda design would need uploads to go through S3 first or the limits lowered in `hosted_app.py` and `clipInput.ts`; (c) EC2, which I would avoid for this. Whatever you pick must run `python -m voice_sidecar.hosted_main serve`, with the environment from section 5, and a second scheduled task for `python -m voice_sidecar.hosted_main reconcile` every few minutes (EventBridge Scheduler is the obvious fit).
 4. **Identity.** The app expects an RS256 JWT whose `sub` is the user id (a Cognito user pool is the natural fit). Set `JWT_ISSUER`, `JWT_AUDIENCE` (the app client id) and optionally `JWT_JWKS_URL`. The API verifies the token itself even if API Gateway also does. The app has no login today: it uses a test login that the service accepts only on loopback. The client is ready for the switch: it calls the service through `POC/src/voice/hostedConfig.ts`, where one call, `setTokenProvider(() => accessToken)`, makes every request carry a bearer token instead. Tell me which provider you choose and I will wire the sign-in screen and token refresh. The app reads the service address from `VITE_VOICE_API_URL` at build time (default `http://127.0.0.1:8790`), and its origin must be in `CORS_ORIGINS`. **Never** run with `AUTH_MODE=dev` anywhere except a laptop; the server refuses it on a non-loopback address.
 5. **IAM.** Use `infra/iam-policy.example.json` as the role for the API and the reconciler: item-level DynamoDB actions (`GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`) on the table, `Query` on the table and `gsi1`, and `GetSecretValue` on that one secret. No wildcards, no `Scan`. Add `kms:Decrypt` if the secret uses a customer-managed key.
 6. **Network and abuse limits.** HTTPS only. Set `CORS_ORIGINS` to the real app origins. Put throttling at the gateway: the in-app per-user limit (`SPEAK_PER_MINUTE`, default 60) only counts within one server instance, and every request spends ElevenLabs characters.
@@ -120,6 +120,8 @@ Single table, on-demand.
 
 **Create:** validate consent (including "recordings and text go to ElevenLabs" and the consent text version) and clips → reserve slot (pending) → clone at ElevenLabs → mark active. A failure at any point frees the slot; if activation fails after a successful clone the app deletes the remote voice, and if that also fails it keeps the pending record and logs the voice name.
 **Delete:** mark `deleting` (the voice is silenced at once) → delete at ElevenLabs (404 counts as done) → remove the record. If ElevenLabs fails the record stays `deleting` and returns 502; the user can retry and the reconciler retries too.
+**Any input is accepted:** a recording made in the app (up to 3 minutes each) or any file, whatever its name or type. Up to 40 files, 100 MB per file, 200 MB per request; only the first 30 minutes of each file are decoded. Files that are not audio or video, or are unusable, are skipped and listed back to the person; they do not fail the request.
+
 **Recordings are not kept:** clips are checked, uploaded and dropped; only length, loudness and warnings are stored.
 
 ## 7. Decisions that are yours (or the team's)
@@ -144,7 +146,7 @@ Single table, on-demand.
 ## 9. How to verify end to end once things exist
 
 ```bash
-cd POC/voice-sidecar && ./hosted.sh setup && ./hosted.sh test            # 189 tests, no cloud needed
+cd POC/voice-sidecar && ./hosted.sh setup && ./hosted.sh test            # 196 tests, no cloud needed
 VOICE_TABLE_NAME=... AWS_REGION=... ./hosted.sh check-table              # the real table
 ELEVENLABS_API_KEY=... ./hosted.sh smoke --clip my-voice.wav --i-am-the-voice-owner   # whoever holds the key
 ```

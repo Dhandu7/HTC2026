@@ -7,6 +7,7 @@
 import type { VoiceApiSettings } from "../voice/hostedConfig";
 import type { HostedVoiceController, State, UploadFile } from "../voice/hostedController";
 import { startRecording, type Recording } from "../voice/recorder";
+import { MAX_RECORDING_SECONDS, checkInputs, formatSeconds, formatSize } from "../voice/clipInput";
 
 type Child = Node | string | null | false | undefined;
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, unknown> = {}, ...kids: Child[]): HTMLElementTagNameMap[K] {
@@ -22,15 +23,14 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, 
   return el;
 }
 
-const PROMPTS = [
-  "Hello, it's me. I'm okay, and I'm glad you're here.",
-  "Could you please turn the light off? It's a little too bright for me.",
-  "I need some help, and I'd like you to stay with me for a moment.",
-  "Yes, that sounds good. No, I don't think so. Maybe later this afternoon.",
-  "Thank you so much for everything you've done today. It really means a lot.",
-  "I'd love a cup of tea, and maybe something small to eat, if that's alright.",
-  "What time is it? Have the children called yet? Tell them I said hello.",
-  "The weather looks lovely today. Let's open the window and let some air in.",
+/** Ideas only: nothing here is required, and nothing has to be read word for word. */
+const IDEAS = [
+  "Tell someone about your day, or what you did this morning.",
+  "Describe a place you love, or a meal you enjoyed.",
+  "Say the things you say often: greetings, thank-yous, jokes, names of people you love.",
+  "Read a few paragraphs from a book, a message or the news in your normal voice.",
+  "Ask questions, answer them, and change your tone: calm, cheerful, serious.",
+  "Add anything you already have: voice memos, voicemails, video calls, old recordings.",
 ];
 
 const MODELS: [string, string][] = [
@@ -41,6 +41,8 @@ const MODELS: [string, string][] = [
 ];
 
 interface Pending extends UploadFile {
+  label: string;
+  size: number;
   seconds?: number;
   source: "recorded" | "file";
 }
@@ -58,8 +60,12 @@ export function mountMyVoice(d: MyVoiceDeps): { open(): void } {
   // Local, unsent form state. It survives re-renders so a state change never wipes what someone typed or recorded.
   const form = { mode: "self" as "self" | "authorized", authorizedBy: "", ack: false, remoteAck: false, testText: "Hello, it's me. I'm okay, and I'm glad you're here.", confirmDelete: "", deleting: false };
   let files: Pending[] = [];
-  let recording: { rec: Recording; prompt: number; level: number } | null = null;
+  let recording: { rec: Recording; startedAt: number; level: number } | null = null;
   let recordError: string | null = null;
+  let inputProblems: string[] = [];
+  let recordCount = 0;
+  let ticker = 0;
+  let playing: { audio: HTMLAudioElement; url: string; index: number } | null = null;
   let state: State = controller.state;
 
   const root = h("div", { class: "mv" });
@@ -69,9 +75,17 @@ export function mountMyVoice(d: MyVoiceDeps): { open(): void } {
     if (dialog.open || s.phase === "creating") draw();
   });
 
+  const stopPreview = () => {
+    if (!playing) return;
+    playing.audio.pause();
+    URL.revokeObjectURL(playing.url);
+    playing = null;
+  };
   const close = () => {
     recording?.rec.cancel();
     recording = null;
+    clearInterval(ticker);
+    stopPreview();
     dialog.close();
   };
 
@@ -117,19 +131,24 @@ export function mountMyVoice(d: MyVoiceDeps): { open(): void } {
     );
   }
 
-  async function toggleRecord(prompt: number) {
-    recordError = null;
-    if (recording) {
-      const r = recording;
-      recording = null;
-      try {
-        const res = await r.rec.stop();
-        files.push({ name: res.filename, blob: res.blob, seconds: res.seconds, source: "recorded" });
-      } catch {
-        /* cancelled or failed: nothing to add */
-      }
-      return draw();
+  async function finishRecording() {
+    if (!recording) return;
+    const r = recording;
+    recording = null;
+    clearInterval(ticker);
+    try {
+      const res = await r.rec.stop();
+      if (res.seconds < 1) recordError = "That was too short to use. Record again and speak for a few seconds.";
+      else files.push({ name: res.filename, blob: res.blob, label: `Recording ${++recordCount}`, size: res.blob.size, seconds: res.seconds, source: "recorded" });
+    } catch {
+      /* cancelled or failed: nothing to add */
     }
+    draw();
+  }
+
+  async function toggleRecord() {
+    recordError = null;
+    if (recording) return finishRecording();
     try {
       const rec = await startRecording(
         (lvl) => {
@@ -139,10 +158,14 @@ export function mountMyVoice(d: MyVoiceDeps): { open(): void } {
             if (m) m.style.width = `${Math.round(lvl * 100)}%`;
           }
         },
-        30,
-        () => void toggleRecord(prompt),
+        MAX_RECORDING_SECONDS,
+        () => void finishRecording(),
       );
-      recording = { rec, prompt, level: 0 };
+      recording = { rec, startedAt: performance.now(), level: 0 };
+      ticker = window.setInterval(() => {
+        const t = root.querySelector<HTMLElement>(".mv-timer");
+        if (t && recording) t.textContent = `${formatSeconds((performance.now() - recording.startedAt) / 1000)} / ${formatSeconds(MAX_RECORDING_SECONDS)}`;
+      }, 250);
     } catch (e) {
       recordError = (e as Error).message;
     }
@@ -150,36 +173,75 @@ export function mountMyVoice(d: MyVoiceDeps): { open(): void } {
   }
 
   function addFiles(list: FileList | File[]) {
-    for (const f of Array.from(list)) files.push({ name: f.name, blob: f, source: "file" });
+    const incoming = Array.from(list);
+    const { accepted, problems } = checkInputs(files, incoming);
+    for (const i of accepted) files.push({ name: incoming[i].name, blob: incoming[i], label: incoming[i].name, size: incoming[i].size, source: "file" });
+    inputProblems = problems;
+    draw();
+  }
+
+  function preview(i: number) {
+    const same = playing?.index === i;
+    stopPreview();
+    if (same) return draw();
+    const url = URL.createObjectURL(files[i].blob);
+    const audio = new Audio(url);
+    playing = { audio, url, index: i };
+    audio.onended = () => {
+      stopPreview();
+      draw();
+    };
+    audio.onerror = () => {
+      stopPreview();
+      inputProblems = [`${files[i]?.label ?? "That file"} cannot be played in this browser. The voice service may still be able to read it.`];
+      draw();
+    };
+    audio.play().catch(() => audio.onerror?.(new Event("error")));
     draw();
   }
 
   function clipsCard(): Node {
-    const input = h("input", { type: "file", accept: "audio/*,video/*,.mp3,.m4a,.aac,.mp4,.webm,.ogg,.opus,.flac,.wav", multiple: true, hidden: true, onchange: (e: Event) => { addFiles((e.target as HTMLInputElement).files!); (e.target as HTMLInputElement).value = ""; } });
-    const drop = h("div", { class: "mv-drop" }, "Drop audio files here, or ", h("button", { type: "button", class: "link", onclick: () => input.click() }, "choose files"), input);
+    // No `accept` filter: any file can be chosen, and the voice service decides what it can read and says why when it cannot.
+    const input = h("input", { type: "file", multiple: true, hidden: true, onchange: (e: Event) => { addFiles((e.target as HTMLInputElement).files!); (e.target as HTMLInputElement).value = ""; } });
+    const drop = h("div", { class: "mv-drop" }, "Drop any audio or video files here, or ", h("button", { type: "button", class: "link", onclick: () => input.click() }, "choose files"), input);
     drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
     drop.addEventListener("dragleave", () => drop.classList.remove("over"));
     drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer) addFiles(e.dataTransfer.files); });
     const recordedSeconds = files.reduce((n, f) => n + (f.seconds ?? 0), 0);
+    const totalBytes = files.reduce((n, f) => n + f.size, 0);
     return h(
       "section",
       { class: "mv-card" },
-      h("h3", {}, "2. Recordings"),
-      h("p", { class: "fine" }, "Record a few sentences, or add audio you already have (MP3, M4A, WAV, WebM and more; long recordings are split automatically). Around 30 seconds to 2 minutes of clear speech works best. Only the voice owner should be speaking, with no music."),
-      ...PROMPTS.map((p, i) =>
-        h("div", { class: "mv-prompt" }, h("span", {}, p), h("button", { type: "button", class: recording?.prompt === i ? "rec on" : "rec", disabled: recording !== null && recording.prompt !== i, onclick: () => void toggleRecord(i) }, recording?.prompt === i ? "■ Stop" : "● Record")),
+      h("h3", {}, "2. Your recordings"),
+      h("p", { class: "fine" }, "Say anything you like, in your own words, or add audio you already have: any audio or video file with your voice on it. Clear speech with no music or other voices works best. About 30 seconds to 2 minutes is enough, and more variety helps."),
+      h(
+        "div",
+        { class: "mv-recbar" },
+        h("button", { type: "button", class: recording ? "rec on" : "rec", onclick: () => void toggleRecord() }, recording ? "■ Stop" : "● Record"),
+        h("span", { class: "mv-timer" }, recording ? `0:00 / ${formatSeconds(MAX_RECORDING_SECONDS)}` : `Up to ${formatSeconds(MAX_RECORDING_SECONDS)} per recording; record as many as you like.`),
       ),
       recording ? h("div", { class: "mv-meter", "aria-label": "microphone level" }, h("i", {})) : null,
       recordError ? h("p", { class: "mv-msg bad", role: "alert" }, recordError) : null,
+      h("details", { class: "mv-ideas" }, h("summary", {}, "Not sure what to say? Some ideas"), h("ul", {}, ...IDEAS.map((t) => h("li", {}, t)))),
       drop,
+      ...inputProblems.map((t) => h("p", { class: "mv-msg bad", role: "alert" }, t)),
       files.length
         ? h(
             "ul",
             { class: "mv-files" },
-            ...files.map((f, i) => h("li", {}, `${f.source === "recorded" ? "🎙" : "📄"} ${f.name}${f.seconds ? ` · ${f.seconds.toFixed(0)} s` : ""}`, h("button", { type: "button", class: "link", onclick: () => { files.splice(i, 1); draw(); } }, "remove"))),
+            ...files.map((f, i) =>
+              h(
+                "li",
+                {},
+                h("span", { class: "mv-fname" }, `${f.source === "recorded" ? "🎙" : "📄"} ${f.label}`),
+                h("span", { class: "fine" }, ` · ${f.seconds ? `${formatSeconds(f.seconds)} · ` : ""}${formatSize(f.size)}`),
+                h("button", { type: "button", class: "link", onclick: () => preview(i) }, playing?.index === i ? "■ stop" : "▶ play"),
+                h("button", { type: "button", class: "link", onclick: () => { stopPreview(); files.splice(i, 1); inputProblems = []; draw(); } }, "remove"),
+              ),
+            ),
           )
         : h("p", { class: "fine" }, "Nothing added yet."),
-      files.length && recordedSeconds ? h("p", { class: "fine" }, `Recorded so far: ${recordedSeconds.toFixed(0)} s.`) : null,
+      files.length ? h("p", { class: "fine" }, `${files.length} file${files.length === 1 ? "" : "s"} · ${formatSize(totalBytes)}${recordedSeconds ? ` · ${formatSeconds(recordedSeconds)} recorded here` : ""}`) : null,
     );
   }
 

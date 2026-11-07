@@ -131,3 +131,37 @@ def test_wav_bytes_round_trips():
     s, sr = speechish(seconds=2.0)
     y, got = load_audio(wav_bytes(s, sr))
     assert got == sr and len(y) == len(s) and np.abs(y - s).max() < 1e-3
+
+
+# ---------------- reading only as much as needed ----------------
+
+
+def test_only_the_first_part_of_a_long_file_is_decoded_in_every_format():
+    s, sr = speechish(seconds=10.0, sr=24000)
+    for fmt in ("WAV", "MP3", "OGG", "FLAC"):
+        buf = io.BytesIO()
+        sf.write(buf, s, sr, format=fmt)
+        y, got_sr = load_audio(buf.getvalue(), max_seconds=3.0)
+        assert len(y) / got_sr == pytest.approx(3.0, abs=0.15), fmt
+    y, got_sr = load_audio(wav_bytes(s, sr))  # the default is generous: a normal file is read whole
+    assert len(y) / got_sr == pytest.approx(10.0, abs=0.01)
+
+
+@pytest.mark.parametrize("fmt,codec", [("ipod", "aac"), ("webm", "libopus")])
+def test_the_ffmpeg_path_also_stops_early(fmt, codec):
+    s, sr = speechish(seconds=8.0, sr=48000)
+    try:
+        data = _encode_with_av(s, sr, fmt, codec)
+    except Exception as e:
+        pytest.skip(f"cannot encode {fmt}/{codec}: {e}")
+    y, got_sr = load_audio(data, max_seconds=2.0)
+    assert len(y) / got_sr == pytest.approx(2.0, abs=0.2)
+
+
+@pytest.mark.parametrize("data", [b"%PDF-1.4\n\x00\x01\x02", b"just some text, not audio at all", bytes(range(256)) * 4])
+def test_a_file_that_is_not_audio_gets_a_plain_message_without_decoder_noise(data):
+    with pytest.raises(AudioError) as e:
+        load_audio(data)
+    msg = str(e.value)
+    assert "does not look like audio" in msg
+    assert "Errno" not in msg and "<none>" not in msg
