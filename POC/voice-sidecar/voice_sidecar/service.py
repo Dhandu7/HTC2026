@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .audio import AudioError, analyze, load_audio, write_wav
+from .audio import AudioError, analyze, load_audio, split_at_pauses, write_wav
 from .config import Settings
 from .engine import Engine, EngineError
 from .store import Consent, ConsentError, ProfileStore, StoreError
 
 PACE_RANGE = (0.8, 1.2)
 TAU_RANGE = (0.1, 0.6)
+#: A clip whose voice is this dissimilar from the average of all clips is flagged as possibly another speaker.
+SIMILARITY_FLAG = 0.8
 
 
 class BadRequest(StoreError):
@@ -66,7 +68,12 @@ class VoiceService:
 
     # ---- training ----
 
+    MAX_SEGMENTS = 40  # per upload, so a one-hour podcast does not become 240 clips
+
     def add_clip(self, pid: str, label: str, data: bytes) -> dict:
+        """Add audio to a profile. A normal clip is stored as is. A long recording (over 60 s) is split
+        at pauses into pieces of about 15 s; pieces that fail the quality checks are skipped and
+        reported. Returns {"clips": [...stored], "skipped": [{label, errors}], "split": bool}."""
         self.store.consent(pid)
         if len(data) > self.settings.max_upload_bytes:
             raise TooLarge(f"file is over {self.settings.max_upload_bytes // (1024 * 1024)} MB")
@@ -74,10 +81,24 @@ class VoiceService:
             samples, sr = load_audio(data)
         except AudioError as e:
             raise ClipRejected({"errors": [str(e)], "warnings": []})
-        report = analyze(samples, sr)
-        if not report.ok:
-            raise ClipRejected(report.to_dict())
-        return self.store.add_clip(pid, label, samples, sr, report.to_dict(), write_wav)
+        split = len(samples) / sr > 60.0
+        pieces = split_at_pauses(samples, sr) if split else [samples]
+        stored, skipped = [], []
+        for i, piece in enumerate(pieces):
+            name = f"{label} (part {i + 1})" if split else label
+            report = analyze(piece, sr)
+            if not report.ok:
+                if not split:
+                    raise ClipRejected(report.to_dict())
+                skipped.append({"label": name, "errors": report.errors})
+                continue
+            if len(stored) >= self.MAX_SEGMENTS:
+                skipped.append({"label": name, "errors": [f"over the limit of {self.MAX_SEGMENTS} pieces per file"]})
+                continue
+            stored.append(self.store.add_clip(pid, name, piece, sr, report.to_dict(), write_wav))
+        if not stored:
+            raise ClipRejected({"errors": ["no usable speech found in this file"] + sorted({e for s in skipped for e in s["errors"]})[:3], "warnings": []})
+        return {"clips": stored, "skipped": skipped, "split": split}
 
     def build(self, pid: str) -> dict:
         """Build the voice embedding from this profile's clips (newest first, up to the reference cap)."""
@@ -97,11 +118,18 @@ class VoiceService:
         except EngineError as e:
             raise Conflict(str(e))
         version = self.store.mark_built(pid)
-        return {"embeddingVersion": version, "clipsUsed": len(chosen), "referenceSeconds": round(seconds, 1), **info}
+        out = {"embeddingVersion": version, "clipsUsed": len(chosen), "referenceSeconds": round(seconds, 1), **info}
+        # Flag clips that do not sound like the rest (another speaker in an interview, a different room).
+        # Reported, never removed automatically: the thresholds are not validated on real data yet.
+        if len(chosen) >= 3:
+            sims = self.engine.clip_similarity(paths)
+            out["similarity"] = [{"clip": c["name"], "label": c["label"], "similarity": v} for c, v in zip(chosen, sims)]
+            out["flagged"] = [x["clip"] for x in out["similarity"] if x["similarity"] < SIMILARITY_FLAG]
+        return out
 
     # ---- speaking ----
 
-    def synthesize(self, pid: str, text: str, pace: float = 1.0, tau: float = 0.3, raw: bool = False) -> "tuple[bytes, dict]":
+    def synthesize(self, pid: str, text: str, pace: float = 1.0, tau: float = 0.3, raw: bool = False, base: str = "EN-US") -> "tuple[bytes, dict]":
         self.store.consent(pid)  # no consent record, no audio: ConsentError
         status = self.store.status(pid)
         if status["paused"]:
@@ -115,8 +143,8 @@ class VoiceService:
             raise Conflict("this voice has not been built yet: add clips and build it first")
         try:
             wav, timing = self.engine.synthesize(
-                text, self.store.embedding_path(pid), _clamp(pace, PACE_RANGE), _clamp(tau, TAU_RANGE), raw
+                text, self.store.embedding_path(pid), _clamp(pace, PACE_RANGE), _clamp(tau, TAU_RANGE), raw, base
             )
         except EngineError as e:
             raise Conflict(str(e))
-        return wav, {**timing, "embeddingVersion": status["embeddingVersion"], "raw": raw}
+        return wav, {**timing, "embeddingVersion": status["embeddingVersion"], "raw": raw, "base": base}

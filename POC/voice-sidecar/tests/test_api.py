@@ -128,7 +128,9 @@ def test_a_good_clip_is_stored_with_its_quality_report(client):
     pid = make_profile(client)
     r = add_clip(client, pid, label="Greeting")
     assert r.status_code == 200
-    clip = r.json()
+    body = r.json()
+    assert body["split"] is False and body["skipped"] == [] and len(body["clips"]) == 1
+    clip = body["clips"][0]
     assert clip["name"] == "clip-001.wav" and clip["label"] == "Greeting"
     assert clip["report"]["ok"] and clip["report"]["seconds"] == pytest.approx(4.0, abs=0.05)
     s = client.get(f"/v1/profiles/{pid}", headers=H).json()
@@ -292,6 +294,121 @@ def test_stereo_uploads_are_mixed_to_mono(client):
     sf.write(buf, stereo, sr, format="WAV", subtype="PCM_16")
     pid = make_profile(client)
     assert add_clip(client, pid, data=buf.getvalue()).status_code == 200
+
+
+# ---------------- any audio file, long recordings, base voice, similarity ----------------
+
+
+def _encode_with_av(samples, sr, fmt, codec):
+    import av
+
+    buf = io.BytesIO()
+    with av.open(buf, "w", format=fmt) as c:
+        st = c.add_stream(codec, rate=sr)
+        st.layout = "mono"
+        pcm = (samples * 32767).astype(np.int16)
+        for i in range(0, len(pcm), 960):  # small frames: encoders may drop an oversized one
+            frame = av.AudioFrame.from_ndarray(pcm[i : i + 960].reshape(1, -1), format="s16", layout="mono")
+            frame.sample_rate = sr
+            frame.pts = i
+            for pkt in st.encode(frame):
+                c.mux(pkt)
+        for pkt in st.encode(None):
+            c.mux(pkt)
+    return buf.getvalue()
+
+
+def test_mp3_uploads_are_accepted(client):
+    s, sr = speechish(seconds=6.0, sr=22050)
+    buf = io.BytesIO()
+    sf.write(buf, s, sr, format="MP3")
+    pid = make_profile(client)
+    r = add_clip(client, pid, data=buf.getvalue())
+    assert r.status_code == 200, r.text
+    assert r.json()["clips"][0]["report"]["seconds"] == pytest.approx(6.0, abs=0.3)
+
+
+@pytest.mark.parametrize("fmt,codec", [("ipod", "aac"), ("webm", "libopus")])
+def test_m4a_webm_and_other_formats_are_decoded_through_ffmpeg(client, fmt, codec):
+    pytest.importorskip("av")
+    s, sr = speechish(seconds=5.0, sr=48000)
+    try:
+        data = _encode_with_av(s, sr, fmt, codec)
+    except Exception as e:  # this ffmpeg build lacks that encoder: nothing to test
+        pytest.skip(f"cannot encode {fmt}/{codec}: {e}")
+    pid = make_profile(client)
+    r = add_clip(client, pid, data=data)
+    assert r.status_code == 200, r.text
+    assert r.json()["clips"][0]["report"]["seconds"] == pytest.approx(5.0, abs=0.5)
+
+
+def test_ogg_and_flac_uploads_are_accepted(client):
+    s, sr = speechish(seconds=5.0, sr=24000)
+    pid = make_profile(client)
+    for fmt in ("OGG", "FLAC"):
+        buf = io.BytesIO()
+        sf.write(buf, s, sr, format=fmt)
+        r = add_clip(client, pid, data=buf.getvalue())
+        assert r.status_code == 200, (fmt, r.text)
+
+
+def test_a_long_recording_is_split_at_pauses_into_clips(client):
+    sr = 24000
+    pieces = []
+    for i in range(8):  # eight 12 s "sentences" separated by 0.6 s pauses = about 100 s
+        pieces += [speechish(seconds=12.0, sr=sr, seed=i)[0], np.zeros(int(0.6 * sr), np.float32)]
+    long = np.concatenate(pieces)
+    pid = make_profile(client)
+    r = add_clip(client, pid, label="interview", data=wav(long, sr))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["split"] is True and len(body["clips"]) >= 4
+    assert all(c["report"]["seconds"] <= 25.5 for c in body["clips"])
+    assert all(c["label"].startswith("interview (part ") for c in body["clips"])
+    assert sum(c["report"]["seconds"] for c in body["clips"]) == pytest.approx(len(long) / sr, abs=2.0)  # nothing dropped
+
+
+def test_split_pieces_that_fail_the_checks_are_skipped_not_fatal(client):
+    sr = 24000
+    long = np.concatenate([speechish(seconds=30.0, sr=sr)[0], np.zeros(40 * sr, np.float32), speechish(seconds=30.0, sr=sr, seed=3)[0]])
+    pid = make_profile(client)
+    body = add_clip(client, pid, data=wav(long, sr)).json()
+    assert body["split"] and body["clips"] and body["skipped"]
+    assert any("almost no speech" in e for k in body["skipped"] for e in k["errors"])
+
+
+def test_a_long_recording_with_no_speech_is_rejected(client):
+    pid = make_profile(client)
+    r = add_clip(client, pid, data=wav(np.zeros(24000 * 90, np.float32), 24000))
+    assert r.status_code == 422 and "no usable speech" in r.json()["error"]
+
+
+def test_the_base_voice_is_selectable_and_validated(env):
+    client, _, engine, _ = env
+    assert "EN_INDIA" in client.get("/health").json()["bases"]
+    pid = make_profile(client)
+    add_clip(client, pid)
+    client.post(f"/v1/profiles/{pid}/build", headers=H)
+    r = client.post("/v1/synthesize", json={"profileId": pid, "text": "hi", "base": "EN-AU"}, headers=H)
+    assert r.status_code == 200 and engine.renders[-1]["base"] == "EN-AU"
+    assert client.post("/v1/synthesize", json={"profileId": pid, "text": "hi"}, headers=H).status_code == 200
+    assert engine.renders[-1]["base"] == "EN-US"
+    assert client.post("/v1/synthesize", json={"profileId": pid, "text": "hi", "base": "nope"}, headers=H).status_code == 409
+
+
+def test_build_flags_clips_that_sound_unlike_the_rest(env):
+    client, _, engine, _ = env
+    engine.clip_similarity = lambda paths: [0.97, 0.96, 0.41]  # the third clip is "someone else"
+    pid = make_profile(client)
+    for i in range(3):
+        add_clip(client, pid, data=wav(*speechish(seed=i)))
+    b = client.post(f"/v1/profiles/{pid}/build", headers=H).json()
+    assert b["flagged"] == ["clip-001.wav"]  # clips are scored newest-first, so 0.41 belongs to the oldest clip
+    assert b["clipsUsed"] == 3  # flagged, never silently dropped
+    two = make_profile(client)
+    for i in range(2):
+        add_clip(client, two, data=wav(*speechish(seed=i)))
+    assert "flagged" not in client.post(f"/v1/profiles/{two}/build", headers=H).json()  # too few clips to judge
 
 
 # ---------------- real engine plumbing (no models loaded) ----------------

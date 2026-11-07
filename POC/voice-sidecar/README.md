@@ -41,10 +41,12 @@ base voice before conversion, and **Compare** plays stock then yours, so you can
 
 Tips for a good voice:
 
-- 1 to 5 minutes of calm, natural speech in total, in clips of 5 to 15 seconds. Longer is not always better; cleaner is.
+- 20 seconds to 3 minutes of calm, natural speech is plenty. Measured: a profile built from 19 s of clean speech already has a stable voice embedding, so more audio did not change it. Cleaner beats longer.
+- Only the voice owner should be speaking in the audio. Interviews and podcasts with other voices pollute the voice; the build flags clips that sound unlike the rest.
 - A quiet room, one microphone distance, no music or fan noise. Each clip is checked on upload and rejected with a reason if it is too short, too quiet, clipped or silent.
 - Read varied sentences, not one phrase repeated.
-- **Voice strength** (`--tau`, 0.1 to 0.6) sets how hard the converter pushes toward your voice. If it sounds too much like the stock voice, raise it. If it sounds distorted, lower it.
+- **Base voice** (`--base`) matters most. OpenVoice only changes the *timbre* of a stock voice; accent, rhythm and intonation come from the base voice. Try `EN-US`, `EN-BR`, `EN_INDIA`, `EN-AU`, `EN-Default` and keep the one closest to how you speak.
+- `--tau` (0.1 to 0.6) is randomness inside the converter, not a similarity dial: measured on a real profile it moved the model's similarity score by under 0.01. Lower is steadier; higher adds variation and can add artifacts.
 
 ## Your data
 

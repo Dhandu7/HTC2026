@@ -44,18 +44,75 @@ class ClipReport:
         return d
 
 
+def _load_with_av(data: bytes) -> tuple[np.ndarray, int]:
+    """Decode anything ffmpeg can read (M4A, MP4, WebM, AAC, Opus, ...) via PyAV, to mono float32."""
+    import av  # optional dependency; soundfile covers WAV, FLAC, OGG and MP3 without it
+
+    with av.open(io.BytesIO(data)) as container:
+        stream = next((st for st in container.streams if st.type == "audio"), None)
+        if stream is None:
+            raise AudioError("no audio track found in this file")
+        rate = int(stream.rate or 44100)
+        resampler = av.AudioResampler(format="flt", layout="mono", rate=rate)
+        parts = []
+        for frame in container.decode(stream):
+            for out in resampler.resample(frame):
+                parts.append(out.to_ndarray().reshape(-1))
+        for out in resampler.resample(None):
+            parts.append(out.to_ndarray().reshape(-1))
+    if not parts:
+        raise AudioError("audio file is empty")
+    return np.concatenate(parts).astype(np.float32), rate
+
+
 def load_audio(data: bytes) -> tuple[np.ndarray, int]:
-    """Decode an uploaded file to mono float32 in [-1, 1]. WAV, FLAC and OGG work; MP3 needs libsndfile 1.1+."""
+    """Decode an uploaded file to mono float32 in [-1, 1].
+
+    soundfile first (WAV, FLAC, OGG, MP3); PyAV/ffmpeg as the fallback for everything else
+    (M4A, MP4 video, WebM, AAC, Opus), so "any clip I already have" works.
+    """
     try:
         audio, sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=True)
-    except Exception as e:  # soundfile raises RuntimeError / LibsndfileError for unknown formats
-        raise AudioError(f"could not read audio (send WAV): {e}") from e
-    if audio.size == 0:
+        mono, rate = audio.mean(axis=1), int(sr)
+    except Exception as first:
+        try:
+            mono, rate = _load_with_av(data)
+        except AudioError:
+            raise
+        except ImportError:
+            raise AudioError(f"could not read this audio format ({first}); install PyAV (pip install av) or send WAV")
+        except Exception as second:
+            raise AudioError(f"could not read this file as audio: {second}") from second
+    if mono.size == 0:
         raise AudioError("audio file is empty")
-    mono = audio.mean(axis=1)
     if not np.isfinite(mono).all():
         raise AudioError("audio contains invalid samples")
-    return mono.astype(np.float32), int(sr)
+    return mono.astype(np.float32), int(rate)
+
+
+def split_at_pauses(samples: np.ndarray, sr: int, target_s: float = 15.0, max_s: float = 25.0) -> list[np.ndarray]:
+    """Cut a long recording into pieces of roughly target_s (never over max_s), at the quietest point
+    in each window so words are not chopped. Short recordings come back as one piece."""
+    n = max(1, int(sr * FRAME_S))
+    frames = len(samples) // n
+    if frames * FRAME_S <= max_s:
+        return [samples]
+    rms = np.sqrt(np.mean(samples[: frames * n].reshape(frames, n) ** 2, axis=1))
+    smooth = np.convolve(rms, np.ones(5) / 5, mode="same")  # a pause, not a single quiet frame
+    out, pos = [], 0
+    lo_f, hi_f = int(target_s / FRAME_S), int(max_s / FRAME_S)
+    while pos < frames:
+        if (frames - pos) <= hi_f:
+            end = frames
+        else:
+            window = smooth[pos + lo_f : pos + hi_f]
+            end = pos + lo_f + int(np.argmin(window))
+        out.append(samples[pos * n : end * n])
+        pos = end
+    tail = samples[frames * n :]
+    if len(tail) and out:
+        out[-1] = np.concatenate([out[-1], tail])
+    return out
 
 
 def analyze(samples: np.ndarray, sr: int) -> ClipReport:

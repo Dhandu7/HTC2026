@@ -43,6 +43,29 @@ What this says:
 
 Licenses read (not legal advice): OpenVoice code MIT, MeloTTS code MIT, OpenVoice V2 weights MIT (Hugging Face model card), MeloTTS-English weights MIT, `bert-base-uncased` Apache-2.0. **Not yet checked:** the other BERT models MeloTTS downloads (it loads one per language at import), UniDic, `wavmark` (watermarking), and the NLTK data. Read those before shipping.
 
+## Quality finding from real use (7 Nov 2026): OpenVoice V2 does not sound like the speaker
+
+First test with the owner's own voice (4 clips, 19 s, clean levels, no clipping): **"doesn't sound like me at all."** That matches the design of the engine, and the measurements say settings will not fix it.
+
+Measured with OpenVoice's own speaker embedding (cosine similarity, 1 = identical; same machine, same profile, same sentence):
+
+| | Similarity to the owner |
+|---|---|
+| The owner's own clips against their average voice | 0.975 to 0.979 (the ceiling) |
+| The stock voice, before conversion | −0.01 to 0.25 depending on the base voice |
+| **After conversion, any base voice, any `tau`** | **0.83 to 0.87** |
+
+- The converter moves the sound a long way toward the speaker (about 0.16 to 0.84) and the embedding is already stable, so **more or cleaner audio is not the bottleneck.**
+- **`tau` is not a similarity control.** In the source it scales the noise in the encoder's sampling. Across 0.1 to 1.0 it changed the score by less than 0.01. An earlier version of the test page and README described it as "voice strength"; that was wrong and has been corrected.
+- **The base voice changes the score by about 0.02**, but it also sets accent, rhythm and intonation, which the converter does not touch. Those are most of what a listener hears as "that's not them". The test page now has a base-voice picker (EN-US, EN-BR, EN_INDIA, EN-AU, EN-Default) so the owner can try the one closest to how they speak.
+- The yardstick is the model's own embedding, so it shows direction, not perceived similarity.
+
+Reading: OpenVoice V2 changes **timbre only**. For a person whose accent, pacing and intonation differ from the stock voice, it will sound like "someone with a similar voice reading in a stock accent". The earlier review overstated what it delivers. Options, in the order I would try them:
+
+1. **Real recordings (T0) stay the primary experience.** Nothing synthetic can be mistaken for the owner, and that was already the plan.
+2. **Try an engine that clones prosody as well as timbre** from a short reference, on the same clips, side by side with OpenVoice. Candidates from the review: Chatterbox, Qwen3-TTS (permissive licenses, to be verified), and F5-TTS or XTTS-v2 (non-commercial, usable only for a hackathon demo). The `Engine` interface in `voice-sidecar/voice_sidecar/engine.py` is meant for this. These are heavier and probably want the hosted GPU.
+3. Keep OpenVoice as a lightweight fallback, labelled honestly, rather than the headline feature.
+
 Install gotchas found (all handled in the spike script or notes):
 
 - **Python 3.9 is required in practice.** The machine's default Python 3.14 cannot run this stack. Use a 3.9 venv.

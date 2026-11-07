@@ -6,11 +6,11 @@ sidecar can use it. Endpoints:
   POST   /v1/profiles                     {consent:{mode, acknowledged, authorizedBy?}} -> {profileId}
   GET    /v1/profiles/{id}                clips with quality reports, built?, paused?
   PATCH  /v1/profiles/{id}                {paused}
-  POST   /v1/profiles/{id}/clips          multipart: file, label? -> the clip and its quality report
+  POST   /v1/profiles/{id}/clips          multipart: file (any audio/video format), label? -> {clips, skipped, split}; recordings over 60 s are split at pauses
   GET    /v1/profiles/{id}/clips/{name}   the stored clip (WAV), to audition it
   DELETE /v1/profiles/{id}/clips/{name}
   POST   /v1/profiles/{id}/build          train the voice embedding from the clips
-  POST   /v1/synthesize                   {profileId, text, pace?, tau?, raw?} -> audio/wav
+  POST   /v1/synthesize                   {profileId, text, pace?, tau?, raw?, base?} -> audio/wav
   GET    /v1/profiles/{id}/export         zip of clips, embedding and consent record
   DELETE /v1/profiles/{id}                permanently delete everything for this voice
 """
@@ -54,7 +54,8 @@ class SynthIn(BaseModel):
     profileId: str
     text: str
     pace: float = Field(1.0, description="speaking rate, 0.8 to 1.2")
-    tau: float = Field(0.3, description="how strongly the converter changes the voice, 0.1 to 0.6")
+    tau: float = Field(0.3, description="randomness in the voice converter, 0.1 to 0.6. Not a similarity control: measured to change similarity by under 0.01")
+    base: str = Field("EN-US", description="stock voice the result is built on; it sets accent, rhythm and intonation (see /health bases)")
     raw: bool = Field(False, description="return the stock base voice, before conversion (for A/B)")
 
 
@@ -90,7 +91,7 @@ def create_app(settings: Optional[Settings] = None, engine: Optional[Engine] = N
 
     @app.get("/health")
     def health():
-        return {"ok": True, "engine": engine.name, "device": engine.device, "warm": engine.warm, "version": __version__}
+        return {"ok": True, "engine": engine.name, "device": engine.device, "warm": engine.warm, "version": __version__, "bases": engine.bases}
 
     @app.get("/ui", response_class=HTMLResponse)
     def ui():
@@ -150,7 +151,7 @@ def create_app(settings: Optional[Settings] = None, engine: Optional[Engine] = N
         import time
 
         t0 = time.perf_counter()
-        wav, info = svc.synthesize(body.profileId, body.text, body.pace, body.tau, body.raw)
+        wav, info = svc.synthesize(body.profileId, body.text, body.pace, body.tau, body.raw, body.base)
         return Response(
             wav,
             media_type="audio/wav",

@@ -16,6 +16,10 @@ FILES = {
     "converter/config.json": 838,
     "converter/checkpoint.pth": 131320490,
     "base_speakers/ses/en-us.pth": 1701,
+    "base_speakers/ses/en-au.pth": 1701,
+    "base_speakers/ses/en-br.pth": 1701,
+    "base_speakers/ses/en-india.pth": 1701,
+    "base_speakers/ses/en-default.pth": 1783,
 }
 
 

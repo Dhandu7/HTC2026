@@ -141,7 +141,7 @@ class ProfileStore:
         m = self.meta(pid)
         name = f"clip-{m['nextClip']:03d}.wav"
         write_wav(self.dir(pid) / "clips" / name, samples, sr)
-        clip = {"name": name, "label": re.sub(r"[^\w .,'!?-]", "", label or "")[:LABEL_MAX] or name, "report": report, "addedAt": int(time.time() * 1000)}
+        clip = {"name": name, "label": re.sub(r"[^\w .,'!?()-]", "", label or "")[:LABEL_MAX] or name, "report": report, "addedAt": int(time.time() * 1000)}
         m["clips"].append(clip)
         m["nextClip"] += 1
         m["built"] = False  # the embedding no longer matches the clips

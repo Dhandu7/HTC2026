@@ -35,6 +35,10 @@
   .msg { margin-top: 8px; white-space: pre-wrap; }
   .msg.err { color: var(--bad); }
   input[type=range] { width: 200px; }
+  .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center; color: var(--dim); margin: 10px 0; }
+  .drop.over { border-color: var(--accent); color: var(--text); }
+  .link { color: var(--accent); cursor: pointer; text-decoration: underline; }
+  select { font: inherit; padding: 6px 8px; border-radius: 8px; border:1px solid var(--line); background: var(--bg); color: var(--text); }
 </style>
 </head>
 <body>
@@ -58,10 +62,10 @@
 
   <section id="s2" class="off">
     <h2>2. Record or upload clips</h2>
-    <p class="dim">Aim for 10 to 20 clips of 5 to 15 seconds each, in a quiet room, speaking naturally, about 1 to 5 minutes in total. You can also upload WAV files you already have.</p>
+    <p class="dim">Record a few sentences, <b>or add audio you already have</b>: MP3, M4A, MP4, WAV, WebM, FLAC or OGG. Long recordings are split at pauses automatically. Use clips where <b>only the voice owner</b> is speaking, with no music or other people. About 20 seconds to 3 minutes of clean speech is plenty.</p>
+    <div id="drop" class="drop">Drop audio files here, or <label class="link">choose files<input type="file" id="file" accept="audio/*,video/*,.mp3,.m4a,.aac,.mp4,.webm,.ogg,.opus,.flac,.wav" multiple hidden></label></div>
     <div id="prompts"></div>
     <div class="row">
-      <input type="file" id="file" accept="audio/*" multiple>
       <span class="meter" title="microphone level"><i id="level"></i></span><span id="recState" class="dim"></span>
     </div>
     <div id="clips"></div>
@@ -79,7 +83,8 @@
     <textarea id="text" rows="3">Hello, it's me. I'm okay, and I'm glad you're here.</textarea>
     <div class="row">
       <label>Pace <input type="range" id="pace" min="0.8" max="1.2" step="0.05" value="1"> <span id="paceV" class="dim">1.0</span></label>
-      <label title="How strongly the converter changes the stock voice. Lower keeps more of the stock voice, higher pushes harder toward yours.">Voice strength (tau) <input type="range" id="tau" min="0.1" max="0.6" step="0.05" value="0.3"> <span id="tauV" class="dim">0.30</span></label>
+      <label title="Randomness inside the voice converter. Lower is steadier, higher adds variation and can add artifacts. Measured: it changes how much the result resembles you by under 1%.">Variation (tau) <input type="range" id="tau" min="0.1" max="0.6" step="0.05" value="0.3"> <span id="tauV" class="dim">0.30</span></label>
+      <label title="The stock voice your result is built on. It sets the accent, rhythm and intonation; the converter only changes the timbre. Try the one closest to how you naturally speak.">Base voice <select id="base"></select></label>
     </div>
     <div class="row">
       <button class="primary" id="speak">Speak in my voice</button>
@@ -87,7 +92,7 @@
       <button id="compare">Compare: stock, then mine</button>
     </div>
     <div class="row"><audio id="player" controls></audio><span id="renderInfo" class="dim"></span></div>
-    <p class="dim">AI-assisted speech. If it does not sound like you, add more varied clips, try 20 to 30 seconds of calm natural speech, or change the voice strength.</p>
+    <p class="dim">AI-assisted speech. OpenVoice changes the <i>timbre</i> of a stock voice to match yours; the accent, rhythm and intonation come from the <b>base voice</b>, so try each one. If none sounds like you, that is a limit of this engine rather than of your recordings.</p>
     <div class="msg err" id="e4"></div>
   </section>
 
@@ -126,6 +131,8 @@ async function health() {
     const h = await (await fetch("/health")).json();
     $("engine").textContent = `${h.engine} · ${h.device} · ${h.warm ? "ready" : "warming up…"}`;
     $("engine").className = "pill " + (h.warm ? "ok" : "warn");
+    const sel = $("base");
+    if (h.bases && sel.options.length !== h.bases.length) { sel.textContent = ""; h.bases.forEach((b) => sel.append(new Option(b, b))); }
     return h;
   } catch { $("engine").textContent = "sidecar not reachable"; $("engine").className = "pill bad"; }
 }
@@ -236,20 +243,38 @@ async function toWav24k(arrayBuffer) {
 
 async function upload(blob, filename, label) {
   const fd = new FormData(); fd.append("file", blob, filename); fd.append("label", label || filename);
-  try { await api(`/v1/profiles/${pid}/clips`, { method: "POST", body: fd }); }
+  let res;
+  try { res = await (await api(`/v1/profiles/${pid}/clips`, { method: "POST", body: fd })).json(); }
   catch (e) { throw new Error(`${label || filename}: ${e.message}`); }
   await refresh();
+  const notes = [];
+  if (res.split) notes.push(`${label || filename}: long recording split into ${res.clips.length} clips`);
+  (res.skipped || []).forEach((k) => notes.push(`skipped ${k.label}: ${k.errors.join("; ")}`));
+  if (notes.length) $("e2").textContent = ($("e2").textContent ? $("e2").textContent + "\n" : "") + notes.join("\n");
 }
-$("file").onchange = async (e) => {
+async function uploadFiles(files) {
   showErr("e2");
-  for (const f of e.target.files) { try { await upload(f, f.name, f.name.replace(/\.[^.]+$/, "")); } catch (err) { showErr("e2", ($("e2").textContent ? $("e2").textContent + "\n" : "") + err.message); } }
-  e.target.value = "";
-};
+  for (const f of files) {
+    $("recState").textContent = `Adding ${f.name}…`;
+    try { await upload(f, f.name, f.name.replace(/\.[^.]+$/, "")); }
+    catch (err) { $("e2").textContent = ($("e2").textContent ? $("e2").textContent + "\n" : "") + err.message; }
+  }
+  $("recState").textContent = "";
+}
+$("file").onchange = async (e) => { await uploadFiles([...e.target.files]); e.target.value = ""; };
+const drop = $("drop");
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => uploadFiles([...e.dataTransfer.files]));
 
 // ---- 3. build ----
 $("build").onclick = async () => {
   showErr("e3"); $("build").disabled = true; $("buildInfo").textContent = "Building… the first build loads the model and can take a moment.";
-  try { const r = await (await api(`/v1/profiles/${pid}/build`, { method: "POST" })).json(); await refresh(); $("buildInfo").textContent += ` Took ${r.seconds} s.`; }
+  try {
+    const r = await (await api(`/v1/profiles/${pid}/build`, { method: "POST" })).json(); await refresh(); $("buildInfo").textContent += ` Took ${r.seconds} s.`;
+    const bad = (r.similarity || []).filter((x) => (r.flagged || []).includes(x.clip));
+    if (bad.length) showErr("e3", "These clips sound unlike the others (another speaker, or a different room?). Remove them and rebuild:\n" + bad.map((x) => `• ${x.label} (similarity ${x.similarity})`).join("\n"));
+  }
   catch (e) { showErr("e3", e); await refresh(); }
 };
 
@@ -259,9 +284,9 @@ $("tau").oninput = () => $("tauV").textContent = (+$("tau").value).toFixed(2);
 async function say(raw) {
   showErr("e4");
   const t0 = performance.now();
-  const r = await api("/v1/synthesize", { method: "POST", ...json({ profileId: pid, text: $("text").value, pace: +$("pace").value, tau: +$("tau").value, raw }) });
+  const r = await api("/v1/synthesize", { method: "POST", ...json({ profileId: pid, text: $("text").value, pace: +$("pace").value, tau: +$("tau").value, raw, base: $("base").value }) });
   const blob = await r.blob(); const ms = Math.round(performance.now() - t0);
-  $("renderInfo").textContent = `${raw ? "stock voice" : "your voice"} · ${r.headers.get("X-Render-Ms")} ms render (base ${r.headers.get("X-Base-Ms")} + convert ${r.headers.get("X-Convert-Ms")}), ${ms} ms total`;
+  $("renderInfo").textContent = `${raw ? "stock voice" : "your voice"} on ${$("base").value} · ${r.headers.get("X-Render-Ms")} ms render (base ${r.headers.get("X-Base-Ms")} + convert ${r.headers.get("X-Convert-Ms")}), ${ms} ms total`;
   const p = $("player"); p.src = URL.createObjectURL(blob);
   await p.play().catch(() => {});
   return new Promise((res) => { p.onended = res; setTimeout(res, 30000); });

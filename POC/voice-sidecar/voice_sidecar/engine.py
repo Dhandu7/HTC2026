@@ -19,10 +19,17 @@ class EngineError(RuntimeError):
     pass
 
 
+#: Melo base speakers -> their speaker-embedding file under base_speakers/ses/. The base speaker sets the
+#: accent, rhythm and intonation of the result (the converter only changes timbre), so offer them all.
+BASE_SPEAKERS = {"EN-US": "en-us", "EN-BR": "en-br", "EN_INDIA": "en-india", "EN-AU": "en-au", "EN-Default": "en-default"}
+DEFAULT_BASE = "EN-US"
+
+
 class Engine(Protocol):
     name: str
     device: str
     warm: bool
+    bases: "list[str]"
 
     def load(self) -> None: ...
 
@@ -31,8 +38,11 @@ class Engine(Protocol):
     def build_embedding(self, wav_paths: Sequence[Path], out_path: Path) -> dict:
         """Write the voice embedding for these clips to out_path. Returns {"seconds": <build time>}."""
 
-    def synthesize(self, text: str, embedding_path: Path, pace: float = 1.0, tau: float = 0.3, raw: bool = False) -> "tuple[bytes, dict]":
+    def synthesize(self, text: str, embedding_path: Path, pace: float = 1.0, tau: float = 0.3, raw: bool = False, base: str = DEFAULT_BASE) -> "tuple[bytes, dict]":
         """Return (WAV bytes, timings). raw=True returns the stock base voice, before conversion, for A/B."""
+
+    def clip_similarity(self, wav_paths: Sequence[Path]) -> "list[float]":
+        """Each clip's similarity (cosine, 1 = identical) to the average voice of all the clips."""
 
 
 class OpenVoiceEngine:
@@ -48,6 +58,7 @@ class OpenVoiceEngine:
             # Renders go through temporary files here; the directory must exist before tempfile uses it.
             self.tmp_dir.mkdir(parents=True, exist_ok=True)
         self.warm = False
+        self.bases: "list[str]" = []
         self._loaded = False
         # The models are not thread-safe: one render at a time.
         self._lock = threading.Lock()
@@ -63,7 +74,7 @@ class OpenVoiceEngine:
             return
         cfg = self._require("converter/config.json")
         ckpt = self._require("converter/checkpoint.pth")
-        ses = self._require("base_speakers/ses/en-us.pth")
+        self._require("base_speakers/ses/en-us.pth")
         # Imported here so the API (and the tests) work without torch installed.
         import torch
         from melo.api import TTS
@@ -71,7 +82,15 @@ class OpenVoiceEngine:
 
         self._torch = torch
         self.tts = TTS(language="EN", device=self.device)
-        self.speaker_id = dict(self.tts.hps.data.spk2id)[self.speaker]
+        spk2id = dict(self.tts.hps.data.spk2id)
+        self.speaker_ids, self.source_ses = {}, {}
+        for name, file in BASE_SPEAKERS.items():
+            f = self.ckpt_dir / "base_speakers" / "ses" / f"{file}.pth"
+            if name in spk2id and f.is_file():
+                self.speaker_ids[name] = spk2id[name]
+                self.source_ses[name] = torch.load(str(f), map_location=self.device, weights_only=True)
+        self.bases = list(self.speaker_ids)
+        self.speaker_id = self.speaker_ids[self.speaker]
 
         watermark, device = self.watermark, self.device
 
@@ -90,7 +109,7 @@ class OpenVoiceEngine:
 
         self.conv = Converter()
         self.conv.load_ckpt(str(ckpt))
-        self.source_se = torch.load(str(ses), map_location=self.device, weights_only=True)
+        self.source_se = self.source_ses[self.speaker]
         self._loaded = True
 
     def warm_up(self) -> None:
@@ -115,18 +134,28 @@ class OpenVoiceEngine:
             os.replace(tmp, out_path)
         return {"seconds": round(time.perf_counter() - t0, 2)}
 
-    def synthesize(self, text: str, embedding_path: Path, pace: float = 1.0, tau: float = 0.3, raw: bool = False):
+    def clip_similarity(self, wav_paths: Sequence[Path]) -> "list[float]":
         self.load()
+        torch = self._torch
+        with self._lock:
+            ses = [self.conv.extract_se([str(p)]).flatten().cpu() for p in wav_paths]
+        mean = torch.stack(ses).mean(dim=0)
+        return [round(float(torch.nn.functional.cosine_similarity(se, mean, dim=0)), 3) for se in ses]
+
+    def synthesize(self, text: str, embedding_path: Path, pace: float = 1.0, tau: float = 0.3, raw: bool = False, base: str = DEFAULT_BASE):
+        self.load()
+        if base not in self.speaker_ids:
+            raise EngineError(f"unknown base voice {base!r}; available: {', '.join(self.bases)}")
         with self._lock, tempfile.TemporaryDirectory(dir=self.tmp_dir) as d:
             src, dst = os.path.join(d, "base.wav"), os.path.join(d, "voice.wav")
             t0 = time.perf_counter()
-            self.tts.tts_to_file(text, self.speaker_id, src, speed=pace, quiet=True)
+            self.tts.tts_to_file(text, self.speaker_ids[base], src, speed=pace, quiet=True)
             t1 = time.perf_counter()
             if raw:
                 data = Path(src).read_bytes()
                 return data, {"baseMs": round((t1 - t0) * 1000), "convertMs": 0}
             target = self._torch.load(str(embedding_path), map_location=self.device, weights_only=True)
-            self.conv.convert(audio_src_path=src, src_se=self.source_se, tgt_se=target, output_path=dst, tau=tau, message="@VocalEyes")
+            self.conv.convert(audio_src_path=src, src_se=self.source_ses[base], tgt_se=target, output_path=dst, tau=tau, message="@VocalEyes")
             t2 = time.perf_counter()
             return Path(dst).read_bytes(), {"baseMs": round((t1 - t0) * 1000), "convertMs": round((t2 - t1) * 1000)}
 

@@ -37,6 +37,6 @@ class Settings:
         default_factory=lambda: [o for o in os.environ.get("VOICE_CORS", "http://localhost:5173,http://127.0.0.1:5173,null").split(",") if o]
     )
     max_text_chars: int = 500
-    max_upload_bytes: int = 25 * 1024 * 1024
+    max_upload_bytes: int = 100 * 1024 * 1024
     #: Cap on reference audio used to build one embedding.
     max_reference_seconds: float = 300.0
