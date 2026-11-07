@@ -12,8 +12,14 @@ import { splitSentences } from "./predict/engine";
 import { ProfileManager, pickSamples, type Profile } from "./profile/profiles";
 import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost } from "./ui/keyboards";
 import { TypingSession, normalizeText, type RunResult } from "./metrics/session";
+import { VoiceRouter } from "./voice/router";
+import { SystemVoice } from "./voice/system";
+import { HostedVoiceApi } from "./voice/hostedApi";
+import { HostedVoiceController, friendlyReason } from "./voice/hostedController";
+import { HostedVoice, BrowserAudioSink } from "./voice/hostedVoice";
+import { apiConfigFrom, loadVoiceApiSettings, saveVoiceApiSettings, usingDevLogin, type VoiceApiSettings } from "./voice/hostedConfig";
+import { mountMyVoice } from "./ui/myVoice";
 import { startVoiceCommands } from "./input/voice";
-import { cloudVoiceAvailable, speakText } from "./voice/elevenlabsVoice";
 import { recordSession } from "./record/recorder";
 import type { SessionMeta } from "./record/format";
 
@@ -163,6 +169,7 @@ function updateStatus() {
     `👤 ${esc(profiles.active.name)}`,
     kb === gazeKb ? `predict ${gazeKb.lastSuggestMs.toFixed(1)} ms` : "",
     llmOn ? "✨ LLM on" : "on-device only",
+    voiceStatusText(),
   ];
   statusEl.innerHTML = parts.filter(Boolean).join(" · ");
 }
@@ -402,10 +409,46 @@ function hotCorner(g: GazePoint) {
 }
 
 // ---------- actions ----------
-/** Speak in the user's cloned voice (ElevenLabs via the local server), else the system voice. */
+// Speaking goes through the voice router: the user's own hosted voice (ElevenLabs, via our service, one voice per
+// user from "My voice") when they have one and it is active, otherwise the system voice. A slow, failing, paused or
+// missing voice never leaves the user silent. The server's single-voice flow (server/elevenlabs.ts, a fixed
+// ELEVENLABS_VOICE_ID) is not used by the app. See docs/VOICE_ENGINE_FLOW.md for the tiers and docs/AWS_VOICE_HANDOFF.md for the service.
+let voiceApiSettings: VoiceApiSettings = loadVoiceApiSettings(localStorage);
+const voiceApi = new HostedVoiceApi(apiConfigFrom(() => voiceApiSettings));
+const voiceCtl = new HostedVoiceController(voiceApi, async (text) => (await voice.speak(text).done));
+const voice = new VoiceRouter({
+  providers: [new HostedVoice(voiceApi, new BrowserAudioSink(), () => voiceCtl.usable()), new SystemVoice()],
+  // The service is the source of truth for consent: the cloned tier is allowed only while the voice is active there.
+  policy: () => ({ allows: (tier) => tier === "system" || (tier === "cloned" && voiceCtl.usable()) }),
+  // Over the network the first sound takes longer than a local clip; past this the system voice speaks instead.
+  startBudgetMs: { cloned: 2500 },
+  onResult: () => updateStatus(),
+});
+const myVoice = mountMyVoice({
+  dialog: $<HTMLDialogElement>("#myvoice"),
+  controller: voiceCtl,
+  getApiSettings: () => voiceApiSettings,
+  saveApiSettings: (s) => {
+    voiceApiSettings = s;
+    saveVoiceApiSettings(localStorage, s);
+  },
+  usingDevLogin,
+});
+$("#voice-btn").addEventListener("click", () => myVoice.open());
+
+function voiceStatusText(): string {
+  const st = voiceCtl.status();
+  const last = voice.last;
+  if (st === "active" && !voiceCtl.usable()) return "🗣 my voice needs verifying";
+  if (st === "active") {
+    return last && last.tier === "system" && last.fellBack ? `🗣 system voice: ${friendlyReason(last.reason) || "my voice unavailable"}` : last?.tier === "cloned" ? `🗣 my voice · ${last.ttfaMs} ms` : "🗣 my voice ready";
+  }
+  return st === "paused" ? "🗣 my voice paused" : "";
+}
+
 function speak(text: string) {
   if (!text.trim()) return;
-  speakText(text);
+  void voice.speak(text);
 }
 
 async function doAction(a: string) {
@@ -827,6 +870,21 @@ $<HTMLSelectElement>("#profile-select").addEventListener("change", (e) => {
  * `npm run dev:all` starts the page and the server together, so the first check can beat the
  * server: while it isn't reachable, check again every 2 s for up to a minute.
  */
+/** The start-screen line about speech: the user's own onboarded voice (My voice), else the system voice. */
+function updateTtsLine() {
+  const el = $("#tts-status");
+  const st = voiceCtl.status();
+  const on = st === "active" && voiceCtl.usable();
+  el.className = `llm-status ${on ? "on" : "off"}`;
+  el.textContent = on
+    ? "🗣 Speaking in your voice"
+    : st === "active"
+      ? "Voice: your voice needs verifying at elevenlabs.com first (open 🗣 My voice). Speaking in the system voice until then."
+      : st === "paused"
+        ? "Voice: your voice is paused (system voice)."
+        : "Voice: system voice. Open 🗣 My voice to create one that sounds like you.";
+}
+
 async function refreshServices(attempt = 0) {
   await llmAvailable(attempt > 0);
   const ai = llmStatus();
@@ -838,13 +896,7 @@ async function refreshServices(attempt = 0) {
     : ai.reason === "no-key"
       ? "AI suggestions off: the LLM server has no API key. Add ANTHROPIC_API_KEY to POC/.env and restart it."
       : "AI suggestions off: LLM server not running (npm run dev:all). On-device prediction still works.";
-  const ttsEl = $("#tts-status");
-  ttsEl.className = `llm-status ${ai.voice ? "on" : "off"}`;
-  ttsEl.textContent = ai.voice
-    ? "🗣 Speaking in your voice (ElevenLabs)"
-    : ai.reason === "no-server"
-      ? "Voice: system voice (server not running)."
-      : "Voice: system voice. Set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID in POC/.env for your own voice.";
+  updateTtsLine();
   if (ai.on) void llmWarm();
   if (ai.reason === "no-server" && attempt < 30) setTimeout(() => void refreshServices(attempt + 1), 2000);
 }
@@ -856,7 +908,7 @@ async function boot() {
   applyProfile(profiles.active);
   gazeKb.update();
   render();
-  void cloudVoiceAvailable(); // check once now so the first Speak doesn't wait on it
+  void voiceCtl.refresh().then(updateTtsLine); // learn whether this user already has a voice; harmless if the service is not running
   void refreshServices();
   try {
     const le = localStorage.getItem("gazetype.lastError.v1");

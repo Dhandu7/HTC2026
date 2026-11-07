@@ -1,0 +1,31 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "VoiceRecordsTable",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem"
+      ],
+      "Resource": "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/vocaleyes-voices"
+    },
+    {
+      "Sid": "VoiceRecordsQuery",
+      "Effect": "Allow",
+      "Action": "dynamodb:Query",
+      "Resource": [
+        "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/vocaleyes-voices",
+        "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/vocaleyes-voices/index/gsi1"
+      ]
+    },
+    {
+      "Sid": "ElevenLabsKeyReadOnly",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:vocaleyes/elevenlabs-api-key-*"
+    }
+  ]
+}
