@@ -12,7 +12,7 @@ Why the local engines (OpenVoice, Chatterbox) were dropped, with the measurement
 
 ```bash
 ./hosted.sh setup        # .venv-hosted, Python 3.12, about 160 MB
-./hosted.sh test         # 136 tests; no AWS account and no ElevenLabs key needed
+./hosted.sh test         # 147 tests; no AWS account and no ElevenLabs key needed
 
 # try the app screens with NO key and no AWS: the service plus a fake ElevenLabs that makes tones, not speech
 ./hosted.sh dev          # then, in another terminal:  cd POC && npm run dev   and open the app's "🗣 My voice" button
@@ -22,6 +22,7 @@ Why the local engines (OpenVoice, Chatterbox) were dropped, with the measurement
 # local development against the real ElevenLabs, in memory, with a test login:
 VOICE_STORE=memory AUTH_MODE=dev ./hosted.sh serve     # picks the key up from the Keychain
 
+./hosted.sh doctor       # read-only: is your key accepted, does the plan allow cloning, how many voice slots are free?
 ./hosted.sh smoke --clip my-voice.wav --i-am-the-voice-owner   # live ElevenLabs check with YOUR key
 VOICE_TABLE_NAME=... ./hosted.sh check-table                    # lifecycle check against the real DynamoDB table
 ./hosted.sh reconcile                                           # retry stuck deletes, free stale reservations (schedule this)

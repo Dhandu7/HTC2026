@@ -3,6 +3,7 @@
 #   ./hosted.sh setup     create .venv-hosted (Python 3.12) and install the light requirements
 #   ./hosted.sh key-set   store your ElevenLabs key in the macOS Keychain (prompts; never shown)
 #   ./hosted.sh key-check / key-delete
+#   ./hosted.sh doctor    is the key accepted, does the plan allow cloning, how many voice slots are free? (read-only)
 #   ./hosted.sh dev       whole stack on your laptop with a FAKE ElevenLabs: no key, no AWS
 #   ./hosted.sh test      run the tests (no AWS account or ElevenLabs key needed)
 #   ./hosted.sh check-table  run the lifecycle check against the REAL DynamoDB table (needs AWS credentials)
@@ -62,6 +63,7 @@ from voice_sidecar.records_check import check_store
 t = os.environ.get('VOICE_TABLE_NAME') or sys.exit('Set VOICE_TABLE_NAME (and AWS credentials/region).')
 for step in check_store(DynamoRecordStore(t, region=os.environ.get('AWS_REGION'))): print('ok  ', step)
 print('table', t, 'passed')" ;;
+  doctor) shift; load_key; exec "$PY" -m voice_sidecar.doctor "$@" ;;
   smoke) shift; load_key; exec "$PY" scripts/elevenlabs_smoke.py "$@" ;;
-  *) echo "usage: ./hosted.sh setup|test|dev|key-set|key-check|key-delete|serve|reconcile|config|check-table|smoke" >&2; exit 2 ;;
+  *) echo "usage: ./hosted.sh setup|test|dev|key-set|key-check|key-delete|doctor|serve|reconcile|config|check-table|smoke" >&2; exit 2 ;;
 esac

@@ -179,13 +179,23 @@ class HostedVoiceService:
         try:
             voice_id = self.eleven.clone(name, files)
             record = self.store.activate(user_id, voice_id, meta)
-        except Exception:
-            self._undo_create(user_id, name, voice_id)
+        except Exception as e:
+            self._undo_create(user_id, name, voice_id, e)
             raise
         return record, skipped
 
-    def _undo_create(self, user_id: str, name: str, voice_id: Optional[str]) -> None:
+    @staticmethod
+    def _why(e: Exception) -> str:
+        """A reason that is safe to log: our own error types carry plain messages with no request text or secrets;
+        for anything else only the type is logged."""
+        if isinstance(e, (ElevenLabsError, HostedError, RecordError)):
+            return f"{type(e).__name__} (HTTP {getattr(e, 'status', '?')}): {e}"
+        return type(e).__name__
+
+    def _undo_create(self, user_id: str, name: str, voice_id: Optional[str], cause: Optional[Exception] = None) -> None:
         """A create that failed part-way must not leak a slot or an orphan voice."""
+        if cause is not None:
+            log.warning("create failed: %s", self._why(cause))
         if voice_id:
             try:
                 self.eleven.delete_voice(voice_id)

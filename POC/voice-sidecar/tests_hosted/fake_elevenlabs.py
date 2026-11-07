@@ -15,6 +15,8 @@ class FakeElevenLabs:
         self.speak_calls = []
         self.fail_next = []  # queue of ("clone"|"speak"|"delete", status) to fail once
         self.voice_limit = voice_limit
+        self.subscription = {"tier": "starter", "status": "active", "character_count": 1200, "character_limit": 75000, "voice_limit": 10, "voice_slots_used": 2, "can_use_instant_voice_cloning": True, "can_use_professional_voice_cloning": False, "current_overage": {"x": 1}}
+        self.subscription_status = 200
         self._n = 0
         self.transport = httpx.MockTransport(self.handle)
 
@@ -33,6 +35,10 @@ class FakeElevenLabs:
         if req.headers.get("xi-api-key") != API_KEY:
             return httpx.Response(401, json={"detail": {"status": "invalid_api_key"}})
         path = req.url.path
+        if req.method == "GET" and path == "/v1/user/subscription":
+            if self.subscription_status != 200:
+                return httpx.Response(self.subscription_status, json={"detail": {"status": "missing_permissions"}})
+            return httpx.Response(200, json=self.subscription)
         if req.method == "POST" and path == "/v1/voices/add":
             if (s := self._failing("clone")):
                 return httpx.Response(s, json={"detail": [{"loc": ["body"], "msg": "bad sample", "type": "x", "input": "PRIVATE USER TEXT"}]})

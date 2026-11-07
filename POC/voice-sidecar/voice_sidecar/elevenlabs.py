@@ -4,6 +4,7 @@ Endpoints and fields, from ElevenLabs' API reference (read 7 Nov 2026):
   POST   /v1/voices/add                    multipart: name, files[], remove_background_noise?, description?  -> {voice_id}
   POST   /v1/text-to-speech/{voice_id}     query output_format; json {text, model_id, voice_settings{...}}   -> audio bytes
   DELETE /v1/voices/{voice_id}                                                                               -> {status:"ok"}
+  GET    /v1/user/subscription                       -> {tier, status, voice_limit, voice_slots_used, can_use_instant_voice_cloning, ...}
 Authentication is the `xi-api-key` header. The key is only ever sent there: it is never logged, never put in a
 URL, and never included in an error message. Request text and audio are not logged either.
 """
@@ -114,6 +115,12 @@ class ElevenLabsClient:
         }
         resp = self._send("speak", "POST", f"/v1/text-to-speech/{self._voice(voice_id)}", params={"output_format": output_format}, json=body)
         return resp.content, resp.headers.get("content-type") or _type_for(output_format)
+
+    def subscription(self) -> dict:
+        """The account's plan, voice-slot and character usage (GET /v1/user/subscription). Only the fields we use."""
+        d = self._send("read the account", "GET", "/v1/user/subscription").json()
+        keep = ("tier", "status", "character_count", "character_limit", "voice_limit", "voice_slots_used", "can_use_instant_voice_cloning", "can_use_professional_voice_cloning")
+        return {k: d.get(k) for k in keep}
 
     def delete_voice(self, voice_id: str) -> None:
         self._send("delete voice", "DELETE", f"/v1/voices/{self._voice(voice_id)}")

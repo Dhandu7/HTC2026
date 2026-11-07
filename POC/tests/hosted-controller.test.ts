@@ -237,5 +237,11 @@ describe("messages for people", () => {
     expect(describeError(new HostedVoiceError("no free voice slots on the ElevenLabs account", "conflict", 409))).toBe("no free voice slots on the ElevenLabs account");
     expect(describeError(new HostedVoiceError("x", "rate_limited", 429, 7))).toMatch(/in 7 seconds/);
     expect(describeError(new HostedVoiceError("x", "locked", 423))).toMatch(/paused/);
+    // a refusal is a setup problem and says so, with the command that diagnoses it; any other upstream failure is just "try again"
+    const refused = describeError(new HostedVoiceError("create voice: ElevenLabs refused the request (check the API key, its permissions and the plan)", "upstream", 502));
+    expect(refused).toMatch(/refused the request/);
+    expect(refused).toMatch(/Starter plan/);
+    expect(refused).toMatch(/hosted\.sh doctor/);
+    expect(describeError(new HostedVoiceError("create voice: ElevenLabs returned an error (HTTP 500)", "upstream", 502))).toBe("The voice provider (ElevenLabs) had a problem. Try again in a moment.");
   });
 });

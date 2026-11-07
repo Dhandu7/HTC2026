@@ -49,7 +49,10 @@ export function describe(e: unknown): string {
     case "rate_limited":
       return `That was too fast. Try again${e.retryAfterSec ? ` in ${e.retryAfterSec} seconds` : " shortly"}.`;
     case "upstream":
-      return "The voice provider (ElevenLabs) had a problem. Try again in a moment.";
+      // ElevenLabs saying no (key, permissions or plan) is a setup problem that retrying will not fix, so say so.
+      return /refused/i.test(e.message)
+        ? "ElevenLabs refused the request. This usually means the API key is missing or wrong, a restricted key lacks permission, or the plan does not allow voice cloning (it needs at least the Starter plan). Whoever runs the service can check with ./hosted.sh doctor."
+        : "The voice provider (ElevenLabs) had a problem. Try again in a moment.";
     case "server":
       return "The voice service had a problem. Try again in a moment.";
     case "cancelled":
