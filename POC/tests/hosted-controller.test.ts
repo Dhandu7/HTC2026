@@ -1,0 +1,241 @@
+import { describe, expect, it } from "vitest";
+import { HostedVoiceError, type VoiceView } from "../src/voice/hostedApi";
+import { HostedVoiceController, describe as describeError, friendlyReason, type CreateInput } from "../src/voice/hostedController";
+
+const SETTINGS = { modelId: "eleven_flash_v2_5", stability: 0.5, similarityBoost: 0.75, style: 0, speed: 1, useSpeakerBoost: true };
+const voice = (status: VoiceView["status"] = "active"): VoiceView => ({ status, settings: SETTINGS, consent: { mode: "self" }, clips: [], createdAt: "", updatedAt: "" });
+const CONSENT = { version: "v1", statements: ["a", "b"] };
+const FILES = [{ name: "a.webm", blob: new Blob(["x"]) }];
+const ALL_OK: CreateInput = { mode: "self", authorizedBy: "", acknowledged: true, remoteProcessingAcknowledged: true };
+
+function setup(over: Partial<Record<string, (...a: any[]) => any>> = {}) {
+  const calls: string[] = [];
+  const api = {
+    consentText: async () => CONSENT,
+    getVoice: async () => null as VoiceView | null,
+    createVoice: async (_c: unknown, _f: unknown) => ({ voice: voice(), skippedClips: [] }),
+    updateVoice: async (_p: unknown) => voice(),
+    deleteVoice: async () => undefined,
+    ...over,
+  };
+  const wrapped = Object.fromEntries(Object.entries(api).map(([k, f]) => [k, (...a: unknown[]) => (calls.push(k), (f as (...x: unknown[]) => unknown)(...a))])) as unknown as typeof api;
+  const c = new HostedVoiceController(wrapped, async () => ({ tier: "cloned", ttfaMs: 321, fellBack: false }));
+  return { c, calls };
+}
+
+describe("loading", () => {
+  it("goes to `none` when the user has no voice, and loads the consent text", async () => {
+    const { c } = setup();
+    await c.refresh();
+    expect(c.state).toMatchObject({ phase: "none", voice: null, consent: CONSENT, busy: false, error: null });
+    expect(c.status()).toBeNull();
+  });
+
+  it.each([
+    ["active", "ready"],
+    ["paused", "ready"],
+    ["deleting", "deleting"],
+  ] as const)("a %s voice shows the %s screen", async (status, phase) => {
+    const { c } = setup({ getVoice: async () => voice(status) });
+    await c.refresh();
+    expect(c.state.phase).toBe(phase);
+    expect(c.status()).toBe(status);
+  });
+
+  it("tells signed-out from unreachable", async () => {
+    const a = setup({ getVoice: async () => { throw new HostedVoiceError("x", "auth", 401); } });
+    await a.c.refresh();
+    expect(a.c.state.phase).toBe("signed-out");
+    const b = setup({ getVoice: async () => { throw new HostedVoiceError("x", "network"); } });
+    await b.c.refresh();
+    expect(b.c.state).toMatchObject({ phase: "unreachable" });
+    expect(b.c.state.error).toMatch(/Can't reach the voice service/);
+  });
+
+  it("an older, slower answer cannot overwrite a newer one", async () => {
+    let first = true;
+    let release!: (v: VoiceView | null) => void;
+    const { c } = setup({ getVoice: () => (first ? ((first = false), new Promise((r) => (release = r))) : Promise.resolve(voice("active"))) });
+    const slow = c.refresh();
+    await c.refresh();
+    expect(c.state.phase).toBe("ready");
+    release(null);
+    await slow;
+    expect(c.state.phase).toBe("ready");
+  });
+
+  it("notifies subscribers, and stops when they unsubscribe", async () => {
+    const { c } = setup();
+    const seen: string[] = [];
+    const off = c.subscribe((s) => seen.push(s.phase));
+    await c.refresh();
+    off();
+    await c.refresh();
+    expect(seen[0]).toBe("loading");
+    expect(seen).toContain("none");
+    const n = seen.length;
+    await c.refresh();
+    expect(seen.length).toBe(n);
+  });
+});
+
+describe("creating a voice", () => {
+  it.each([
+    [{ acknowledged: false }, /own voice/],
+    [{ remoteProcessingAcknowledged: false }, /sent to ElevenLabs/],
+    [{ mode: "authorized" as const, authorizedBy: "  " }, /name of the voice owner/],
+  ])("refuses before uploading anything: %j", async (patch, msg) => {
+    const { c, calls } = setup();
+    await c.refresh();
+    expect(await c.create({ ...ALL_OK, ...patch }, FILES)).toBe(false);
+    expect(c.state.error).toMatch(msg);
+    expect(calls).not.toContain("createVoice");
+    expect(c.state.phase).toBe("none");
+  });
+
+  it("needs at least one recording, and the consent text to have loaded", async () => {
+    const a = setup();
+    await a.c.refresh();
+    expect(await a.c.create(ALL_OK, [])).toBe(false);
+    expect(a.c.state.error).toMatch(/at least one recording/);
+    const b = setup({ consentText: async () => { throw new HostedVoiceError("x", "network"); } });
+    await b.c.refresh();
+    expect(await b.c.create(ALL_OK, FILES)).toBe(false);
+    expect(b.calls).not.toContain("createVoice");
+  });
+
+  it("sends the consent the person actually gave, with the version they were shown", async () => {
+    let sent: any;
+    const { c } = setup({ createVoice: async (consent: unknown) => ((sent = consent), { voice: voice(), skippedClips: [] }) });
+    await c.refresh();
+    expect(await c.create({ ...ALL_OK, mode: "authorized", authorizedBy: "  Sam  " }, FILES)).toBe(true);
+    expect(sent).toEqual({ mode: "authorized", authorizedBy: "Sam", acknowledged: true, remoteProcessingAcknowledged: true, consentVersion: "v1" });
+    expect(c.state).toMatchObject({ phase: "ready", notice: "Your voice is ready." });
+  });
+
+  it("goes through `creating` and does not mark the voice usable until it succeeds", async () => {
+    const phases: string[] = [];
+    let release!: () => void;
+    const { c } = setup({ createVoice: () => new Promise((r) => (release = () => r({ voice: voice(), skippedClips: [] }))) });
+    await c.refresh();
+    c.subscribe((s) => phases.push(s.phase));
+    const p = c.create(ALL_OK, FILES);
+    expect(c.state.phase).toBe("creating");
+    expect(c.status()).toBeNull();
+    release();
+    await p;
+    expect(phases).toContain("creating");
+    expect(c.state.phase).toBe("ready");
+  });
+
+  it("reports unusable recordings, and goes back to `none` so the person can try again", async () => {
+    const skipped = [{ label: "clip", errors: ["far too quiet"] }];
+    const { c } = setup({ createVoice: async () => { throw new HostedVoiceError("need at least 10 seconds of usable speech", "clips", 422, undefined, skipped); } });
+    await c.refresh();
+    expect(await c.create(ALL_OK, FILES)).toBe(false);
+    expect(c.state).toMatchObject({ phase: "none", skipped, voice: null });
+    expect(c.state.error).toBe("need at least 10 seconds of usable speech");
+  });
+
+  it("mentions recordings that were skipped even when it worked", async () => {
+    const { c } = setup({ createVoice: async () => ({ voice: voice(), skippedClips: [{ label: "x", errors: ["silent"] }] }) });
+    await c.refresh();
+    await c.create(ALL_OK, FILES);
+    expect(c.state.notice).toMatch(/could not be used/);
+    expect(c.state.skipped).toHaveLength(1);
+  });
+});
+
+describe("using and managing the voice", () => {
+  it("pause and resume update the status the router relies on", async () => {
+    const { c } = setup({ getVoice: async () => voice("active"), updateVoice: async (p: any) => voice(p.paused ? "paused" : "active") });
+    await c.refresh();
+    await c.setPaused(true);
+    expect(c.status()).toBe("paused");
+    expect(c.state.notice).toMatch(/system voice/);
+    await c.setPaused(false);
+    expect(c.status()).toBe("active");
+  });
+
+  it("saving settings sends only what changed", async () => {
+    let sent: unknown;
+    const { c } = setup({ getVoice: async () => voice(), updateVoice: async (p: unknown) => ((sent = p), voice()) });
+    await c.refresh();
+    await c.saveSettings({ stability: 0.9 });
+    expect(sent).toEqual({ settings: { stability: 0.9 } });
+  });
+
+  it("a failed change shows a message and refreshes when the voice has vanished", async () => {
+    const { c, calls } = setup({ getVoice: async () => voice(), updateVoice: async () => { throw new HostedVoiceError("no voice", "not_found", 404); } });
+    await c.refresh();
+    await c.setPaused(true);
+    expect(c.state.error).toBe("no voice");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calls.filter((x) => x === "getVoice").length).toBe(2);
+  });
+
+  it("a test sentence goes through the router and says which voice spoke", async () => {
+    const { c } = setup({ getVoice: async () => voice() });
+    await c.refresh();
+    await c.test("Hello there.");
+    expect(c.state.notice).toBe("Spoken in your voice, 321 ms.");
+    await c.test("   ");
+    expect(c.state.error).toBe("Type something to say.");
+  });
+
+  it("a test that fell back to the system voice says so, and why", async () => {
+    const c = new HostedVoiceController({ consentText: async () => CONSENT, getVoice: async () => voice(), createVoice: async () => ({ voice: voice(), skippedClips: [] }), updateVoice: async () => voice(), deleteVoice: async () => undefined }, async () => ({ tier: "system", ttfaMs: 90, fellBack: true, reason: "cloned too slow (>2500 ms)" }));
+    await c.refresh();
+    await c.test("Hello.");
+    expect(c.state.notice).toBe("Spoken in the system voice because your voice was too slow to answer.");
+  });
+});
+
+describe("deleting", () => {
+  it("removes the voice and returns to `none`", async () => {
+    const { c } = setup({ getVoice: async () => voice() });
+    await c.refresh();
+    expect(await c.remove()).toBe(true);
+    expect(c.state).toMatchObject({ phase: "none", voice: null, notice: "Your voice was deleted." });
+    expect(c.status()).toBeNull();
+  });
+
+  it("if ElevenLabs cannot delete it yet, the voice is shown as `deleting` and can be retried", async () => {
+    let n = 0;
+    const { c } = setup({
+      getVoice: async () => (n === 0 ? voice("active") : voice("deleting")),
+      deleteVoice: async () => { n++; throw new HostedVoiceError("retried", "upstream", 502); },
+    });
+    await c.refresh();
+    expect(await c.remove()).toBe(false);
+    expect(c.state.phase).toBe("deleting");
+    expect(c.status()).toBe("deleting"); // switched off: the router will not use it
+    expect(c.state.error).toMatch(/marked for deletion/);
+  });
+});
+
+describe("messages for people", () => {
+  it("turns the router's reasons into plain words, with no stray punctuation", () => {
+    expect(friendlyReason("cloned too slow (>2500 ms)")).toBe("your voice was too slow to answer");
+    expect(friendlyReason("cloned failed: Could not reach the voice service.")).toBe("your voice wasn't available (Could not reach the voice service)");
+    expect(friendlyReason("cloned not allowed")).toBe("your voice is switched off");
+    expect(friendlyReason(undefined)).toBe("");
+    expect(friendlyReason("something else")).toBe("something else");
+  });
+
+  it("opening the screen again starts clean: an old 'Spoken in…' notice does not linger", async () => {
+    const { c } = setup({ getVoice: async () => voice() });
+    await c.refresh();
+    await c.test("Hello.");
+    expect(c.state.notice).toMatch(/Spoken/);
+    await c.refresh();
+    expect(c.state.notice).toBeNull();
+  });
+
+  it("never shows technical detail for unknown errors, and keeps the service's own plain wording otherwise", () => {
+    expect(describeError(new Error("TypeError: x is undefined at line 4"))).toBe("Something went wrong. Please try again.");
+    expect(describeError(new HostedVoiceError("no free voice slots on the ElevenLabs account", "conflict", 409))).toBe("no free voice slots on the ElevenLabs account");
+    expect(describeError(new HostedVoiceError("x", "rate_limited", 429, 7))).toMatch(/in 7 seconds/);
+    expect(describeError(new HostedVoiceError("x", "locked", 423))).toMatch(/paused/);
+  });
+});

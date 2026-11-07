@@ -11,6 +11,11 @@ import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost } from "./ui/keyb
 import { TypingSession, normalizeText, type RunResult } from "./metrics/session";
 import { VoiceRouter } from "./voice/router";
 import { SystemVoice } from "./voice/system";
+import { HostedVoiceApi } from "./voice/hostedApi";
+import { HostedVoiceController, friendlyReason } from "./voice/hostedController";
+import { HostedVoice, BrowserAudioSink } from "./voice/hostedVoice";
+import { apiConfigFrom, loadVoiceApiSettings, saveVoiceApiSettings, usingDevLogin, type VoiceApiSettings } from "./voice/hostedConfig";
+import { mountMyVoice } from "./ui/myVoice";
 import { startVoiceCommands } from "./input/voice";
 
 // ---------- Electron bridge (absent in the browser) ----------
@@ -148,6 +153,7 @@ function updateStatus() {
     `${settings.selectionMode}${settings.selectionMode === "dwell" ? ` ${kb === gazeKb ? settings.dwellMs : settings.baselineDwellMs} ms` : ""}`,
     settings.selectionMode === "blink" ? `blinks ✓${blink.accepted} ✗${blink.rejectedShort + blink.rejectedLong}` : "",
     llmOn ? "✨ LLM on" : "on-device only",
+    voiceStatusText(),
   ];
   statusEl.innerHTML = parts.filter(Boolean).join(" · ");
 }
@@ -270,9 +276,40 @@ function hotCorner(g: GazePoint) {
 }
 
 // ---------- actions ----------
-// Speaking goes through the voice router. Today only the system voice is registered, so
-// behaviour is unchanged; recorded-clip and cloned tiers plug in here (docs/VOICE_ENGINE_FLOW.md).
-const voice = new VoiceRouter({ providers: [new SystemVoice()] });
+// Speaking goes through the voice router: the user's own hosted voice (ElevenLabs, via our service) when they have
+// one and it is active, otherwise the system voice. A slow, failing, paused or missing voice never leaves the
+// user silent. See docs/VOICE_ENGINE_FLOW.md for the tiers and docs/AWS_VOICE_HANDOFF.md for the service.
+let voiceApiSettings: VoiceApiSettings = loadVoiceApiSettings(localStorage);
+const voiceApi = new HostedVoiceApi(apiConfigFrom(() => voiceApiSettings));
+const voiceCtl = new HostedVoiceController(voiceApi, async (text) => (await voice.speak(text).done));
+const voice = new VoiceRouter({
+  providers: [new HostedVoice(voiceApi, new BrowserAudioSink(), () => voiceCtl.status() === "active"), new SystemVoice()],
+  // The service is the source of truth for consent: the cloned tier is allowed only while the voice is active there.
+  policy: () => ({ allows: (tier) => tier === "system" || (tier === "cloned" && voiceCtl.status() === "active") }),
+  // Over the network the first sound takes longer than a local clip; past this the system voice speaks instead.
+  startBudgetMs: { cloned: 2500 },
+  onResult: () => updateStatus(),
+});
+const myVoice = mountMyVoice({
+  dialog: $<HTMLDialogElement>("#myvoice"),
+  controller: voiceCtl,
+  getApiSettings: () => voiceApiSettings,
+  saveApiSettings: (s) => {
+    voiceApiSettings = s;
+    saveVoiceApiSettings(localStorage, s);
+  },
+  usingDevLogin,
+});
+$("#voice-btn").addEventListener("click", () => myVoice.open());
+
+function voiceStatusText(): string {
+  const st = voiceCtl.status();
+  const last = voice.last;
+  if (st === "active") {
+    return last && last.tier === "system" && last.fellBack ? `🗣 system voice: ${friendlyReason(last.reason) || "my voice unavailable"}` : last?.tier === "cloned" ? `🗣 my voice · ${last.ttfaMs} ms` : "🗣 my voice ready";
+  }
+  return st === "paused" ? "🗣 my voice paused" : "";
+}
 
 function speak(text: string) {
   if (!text.trim()) return;
@@ -518,6 +555,7 @@ async function boot() {
   gazeKb.update();
   render();
   llmOn = await llmAvailable();
+  void voiceCtl.refresh(); // learn whether this user already has a voice; harmless if the service is not running
   try {
     const le = localStorage.getItem("gazetype.lastError.v1");
     if (le) lastError = JSON.parse(le);

@@ -12,10 +12,15 @@ Why the local engines (OpenVoice, Chatterbox) were dropped, with the measurement
 
 ```bash
 ./hosted.sh setup        # .venv-hosted, Python 3.12, about 160 MB
-./hosted.sh test         # 135 tests; no AWS account and no ElevenLabs key needed
+./hosted.sh test         # 136 tests; no AWS account and no ElevenLabs key needed
 
-# local development: in memory, no real login (dev auth only works on a loopback address)
-VOICE_STORE=memory AUTH_MODE=dev ELEVENLABS_API_KEY=... ./hosted.sh serve
+# try the app screens with NO key and no AWS: the service plus a fake ElevenLabs that makes tones, not speech
+./hosted.sh dev          # then, in another terminal:  cd POC && npm run dev   and open the app's "🗣 My voice" button
+
+# your ElevenLabs key: stored in the macOS Keychain, never in a file, shell history or the process list
+./hosted.sh key-set      # prompts for the key (nothing is shown); ./hosted.sh key-check / key-delete
+# local development against the real ElevenLabs, in memory, with a test login:
+VOICE_STORE=memory AUTH_MODE=dev ./hosted.sh serve     # picks the key up from the Keychain
 
 ./hosted.sh smoke --clip my-voice.wav --i-am-the-voice-owner   # live ElevenLabs check with YOUR key
 VOICE_TABLE_NAME=... ./hosted.sh check-table                    # lifecycle check against the real DynamoDB table
@@ -23,8 +28,7 @@ VOICE_TABLE_NAME=... ./hosted.sh check-table                    # lifecycle chec
 ./hosted.sh config                                              # effective configuration, never a secret value
 ```
 
-**Never paste the ElevenLabs key into a chat or commit it.** Locally it is an environment variable
-(`ELEVENLABS_API_KEY`); in AWS it comes from Secrets Manager (`ELEVENLABS_SECRET_ID`). Every configuration variable is
+**Never paste the ElevenLabs key into a chat, type it after `export` in a terminal (that lands in your shell history), or commit it.** Use `./hosted.sh key-set`. In AWS it comes from Secrets Manager (`ELEVENLABS_SECRET_ID`). If a key ever does leak, rotate it in the ElevenLabs dashboard. Every configuration variable is
 documented at the top of [`voice_sidecar/hosted_main.py`](voice_sidecar/hosted_main.py) and in the handoff.
 
 ## API
@@ -62,6 +66,7 @@ voice_sidecar/audio.py          decoding any audio format, quality checks, split
 voice_sidecar/records_check.py  lifecycle check used by `./hosted.sh check-table`
 infra/                          DynamoDB table (CloudFormation JSON) and an example least-privilege IAM policy
 scripts/elevenlabs_smoke.py     live check you run yourself
+scripts/dev_stack.py            `./hosted.sh dev`: the service with an in-process fake ElevenLabs
 tests_hosted/                   the tests, with a fake ElevenLabs and moto for DynamoDB
 ```
 
@@ -71,3 +76,23 @@ tests_hosted/                   the tests, with a fake ElevenLabs and moto for D
 - Speech is returned as a whole file, not streamed.
 - The consent text is a draft without legal or privacy review.
 - Which ElevenLabs plan is used decides how many users can have a voice (Starter 10, Creator 30, Pro 160, Scale and Business 660).
+
+## The app side
+
+The "🗣 My voice" button in the app opens the screen: read and accept the consent, record or add audio, create the voice, try it,
+change its settings, pause it, delete it. Speaking then goes through the app's voice router: your voice when it is active,
+the system voice otherwise or when the service is slow or down.
+
+```
+POC/src/voice/hostedApi.ts         client for the API above (dev login on loopback only, or a bearer token)
+POC/src/voice/hostedController.ts  the screen's logic and its plain-language messages
+POC/src/voice/hostedVoice.ts       the router tier that speaks in the hosted voice
+POC/src/voice/hostedConfig.ts      service address and who is calling; setTokenProvider() is where sign-in plugs in
+POC/src/voice/recorder.ts          microphone recording
+POC/src/ui/myVoice.ts              the screen (plain DOM calls; service text is never used as HTML)
+```
+
+Sign-in is not built. Until it is, the app uses a test login that the service accepts only on a loopback address. When a login
+provider is chosen, call `setTokenProvider(() => accessToken)` and the app switches to bearer tokens. Set `VITE_VOICE_API_URL` at build
+time to point the app at the real service. The screen is for the person setting up the voice or a carer, with a mouse or keyboard;
+speaking in the voice afterwards works with gaze like everything else.

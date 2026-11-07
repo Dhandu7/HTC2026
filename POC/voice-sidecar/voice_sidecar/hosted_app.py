@@ -73,7 +73,7 @@ def create_hosted_app(service: HostedVoiceService, auth, cors_origins=(), speak_
             CORSMiddleware,
             allow_origins=list(cors_origins),
             allow_methods=["GET", "POST", "PATCH", "DELETE"],
-            allow_headers=["Authorization", "Content-Type"],
+            allow_headers=["Authorization", "Content-Type", "X-User-Id"],  # X-User-Id is the dev login; the jwt login ignores it
             expose_headers=["X-Render-Ms", "X-Model-Id", "X-Ai-Assisted"],
         )
 

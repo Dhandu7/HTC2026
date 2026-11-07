@@ -189,3 +189,17 @@ def test_delete_then_a_failed_delete_is_retried(env):
     assert client.post("/v1/me/voice/speak", headers=A("alice"), json={"text": "hi"}).status_code == 409
     assert client.delete("/v1/me/voice", headers=A("alice")).status_code == 200  # the user can simply retry
     assert fake.voices == {} and client.get("/v1/me/voice", headers=A("alice")).status_code == 404 and store.slots_used() == 0
+
+
+def test_the_browser_preflight_check_passes_for_the_app_origin_and_not_for_others():
+    """A browser sends this check before any call that carries a custom header. If it fails, the app cannot reach the service at all."""
+    fake = FakeElevenLabs()
+    svc = HostedVoiceService(MemoryRecordStore(), ElevenLabsClient(API_KEY, transport=fake.transport), HostedConfig())
+    client = TestClient(create_hosted_app(svc, DevAuth(), cors_origins=("http://localhost:5173",)))
+    ask = lambda origin, headers: client.options("/v1/me/voice", headers={"Origin": origin, "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": headers})
+    for headers in ("x-user-id", "authorization", "content-type", "authorization,content-type"):
+        ok = ask("http://localhost:5173", headers)
+        assert ok.status_code == 200 and ok.headers["access-control-allow-origin"] == "http://localhost:5173", headers
+    other = ask("https://evil.example.com", "x-user-id")
+    assert "access-control-allow-origin" not in other.headers  # a page from another site is not let in
+    assert ask("http://localhost:5173", "x-something-else").status_code == 400  # and unknown headers are not blessed

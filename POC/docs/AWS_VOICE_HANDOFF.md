@@ -34,7 +34,7 @@ Read on 7 Nov 2026 from their docs and help center; re-check before relying on t
 
 ## 3. What is built and tested (application side)
 
-All in `POC/voice-sidecar/`. `./hosted.sh setup` then `./hosted.sh test` runs **135 tests with no AWS account and no ElevenLabs key**.
+All in `POC/voice-sidecar/`. `./hosted.sh setup` then `./hosted.sh test` runs **136 tests with no AWS account and no ElevenLabs key**.
 
 | Piece | File | Notes |
 |---|---|---|
@@ -48,6 +48,8 @@ All in `POC/voice-sidecar/`. `./hosted.sh setup` then `./hosted.sh test` runs **
 | IAM example | `infra/iam-policy.example.json` | Least privilege; a test fails if the code starts using an action the policy lacks. |
 | Post-deploy check | `./hosted.sh check-table` | Runs the whole record lifecycle against the real table with a throwaway user. |
 | Live ElevenLabs check | `./hosted.sh smoke ...` | Run by whoever holds the key. Never touches DynamoDB. |
+| App screens | `POC/src/voice/hosted*.ts`, `POC/src/ui/myVoice.ts` | The "My voice" screen: consent, record or upload, create, try, settings, pause, delete. 58 tests on the logic. Tried end to end in a browser against `./hosted.sh dev` (a fake ElevenLabs). |
+| Local stack, no key, no AWS | `./hosted.sh dev` | The service in memory with a fake ElevenLabs, for building and demoing the screens. |
 
 API (all `/v1/me/...` routes act only on the signed-in user's own voice; the user id is the token's `sub`, never a request field):
 
@@ -73,7 +75,7 @@ Each item has a check so you and I can agree when it is done.
 1. **The DynamoDB table.** Start from `infra/voices-table.cfn.json` (CloudFormation JSON; port it to CDK or Terraform if that is the team's standard). On-demand billing, point-in-time recovery, encryption, deletion protection, TTL on `ttl`, one GSI `gsi1`. *Check:* `VOICE_TABLE_NAME=... ./hosted.sh check-table` prints every step `ok`.
 2. **The ElevenLabs API key in Secrets Manager.** Suggested name `vocaleyes/elevenlabs-api-key`, value `{"api_key": "..."}` (a plain string also works). The app reads it by `ELEVENLABS_SECRET_ID`. **The key must never appear in chat, in the repo, in CloudFormation parameters or in logs.** If ElevenLabs lets you scope the key, limit it to text-to-speech and voices (I did not verify that option exists). Decide a rotation routine. *Check:* `./hosted.sh serve` starts with only `ELEVENLABS_SECRET_ID` set.
 3. **Compute for the API.** The app is a FastAPI service. Options, none chosen: (a) a container on App Runner or ECS Fargate behind HTTPS runs it unchanged and is the least work; (b) Lambda behind API Gateway or a function URL works but needs an adapter that is not in the repo, and you should check current payload, timeout and streaming limits against uploads of a few MB and speech responses; (c) EC2, which I would avoid for this. Whatever you pick must run `python -m voice_sidecar.hosted_main serve`, with the environment from section 5, and a second scheduled task for `python -m voice_sidecar.hosted_main reconcile` every few minutes (EventBridge Scheduler is the obvious fit).
-4. **Identity.** The app expects an RS256 JWT whose `sub` is the user id (a Cognito user pool is the natural fit). Set `JWT_ISSUER`, `JWT_AUDIENCE` (the app client id) and optionally `JWT_JWKS_URL`. The API verifies the token itself even if API Gateway also does. The POC app has no login today, so someone has to add sign-in to the client; tell me which provider you choose and I will wire the client side. **Never** run with `AUTH_MODE=dev` anywhere except a laptop; the server refuses it on a non-loopback address.
+4. **Identity.** The app expects an RS256 JWT whose `sub` is the user id (a Cognito user pool is the natural fit). Set `JWT_ISSUER`, `JWT_AUDIENCE` (the app client id) and optionally `JWT_JWKS_URL`. The API verifies the token itself even if API Gateway also does. The app has no login today: it uses a test login that the service accepts only on loopback. The client is ready for the switch: it calls the service through `POC/src/voice/hostedConfig.ts`, where one call, `setTokenProvider(() => accessToken)`, makes every request carry a bearer token instead. Tell me which provider you choose and I will wire the sign-in screen and token refresh. The app reads the service address from `VITE_VOICE_API_URL` at build time (default `http://127.0.0.1:8790`), and its origin must be in `CORS_ORIGINS`. **Never** run with `AUTH_MODE=dev` anywhere except a laptop; the server refuses it on a non-loopback address.
 5. **IAM.** Use `infra/iam-policy.example.json` as the role for the API and the reconciler: item-level DynamoDB actions (`GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`) on the table, `Query` on the table and `gsi1`, and `GetSecretValue` on that one secret. No wildcards, no `Scan`. Add `kms:Decrypt` if the secret uses a customer-managed key.
 6. **Network and abuse limits.** HTTPS only. Set `CORS_ORIGINS` to the real app origins. Put throttling at the gateway: the in-app per-user limit (`SPEAK_PER_MINUTE`, default 60) only counts within one server instance, and every request spends ElevenLabs characters.
 7. **Logging and alarms.** Application logs deliberately contain **no request text, audio or tokens**, only ElevenLabs voice *names* on failures. Do not turn on request-body logging at the gateway or load balancer. Please alarm on: `reconcile` reporting `deleteFailed > 0`; records stuck in `pending` or `deleting` for more than about 10 minutes; ElevenLabs 5xx or 429 rates; slot use near the cap (read `META#elevenlabs / SLOTS.used`; publishing it as a metric is not built).
@@ -141,7 +143,7 @@ Single table, on-demand.
 ## 9. How to verify end to end once things exist
 
 ```bash
-cd POC/voice-sidecar && ./hosted.sh setup && ./hosted.sh test            # 135 tests, no cloud needed
+cd POC/voice-sidecar && ./hosted.sh setup && ./hosted.sh test            # 136 tests, no cloud needed
 VOICE_TABLE_NAME=... AWS_REGION=... ./hosted.sh check-table              # the real table
 ELEVENLABS_API_KEY=... ./hosted.sh smoke --clip my-voice.wav --i-am-the-voice-owner   # whoever holds the key
 ```
