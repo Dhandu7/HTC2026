@@ -31,6 +31,10 @@ export interface VoiceView {
   clips: ClipMeta[];
   createdAt: string;
   updatedAt: string;
+  /** ElevenLabs will not let this voice speak until its owner verifies it in the ElevenLabs dashboard. */
+  needsVerification?: boolean;
+  /** Present only while verification is needed: the name to look for in the ElevenLabs dashboard. */
+  voiceName?: string;
 }
 
 export interface ConsentText {

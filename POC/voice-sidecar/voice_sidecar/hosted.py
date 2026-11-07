@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from .audio import AudioError, analyze, load_audio, split_at_pauses, wav_bytes
-from .elevenlabs import ElevenLabsClient, ElevenLabsError, RemoteVoiceMissing
+from .elevenlabs import ElevenLabsClient, ElevenLabsError, RemoteVoiceMissing, VoiceNeedsVerification
 from .records import PROVIDER, RecordError, VoiceRecord, VoiceRecordStore, utc_now
 
 log = logging.getLogger("voice.hosted")
@@ -77,6 +77,20 @@ class VoicePaused(HostedError):
 
 class DeleteIncomplete(HostedError):
     status = 502
+
+
+class NeedsVerification(HostedError):
+    """The voice exists but ElevenLabs will not let it speak until its owner verifies it there."""
+
+    status = 409
+
+
+def verification_message(voice_name: str) -> str:
+    return (
+        "ElevenLabs needs you to verify this voice before it can speak. Sign in to elevenlabs.io, open Voices, find the voice "
+        f"named '{voice_name}', and complete its verification (you read a short phrase aloud so ElevenLabs can confirm the voice "
+        "is yours). Then try again here. If verification keeps failing, ElevenLabs support can help."
+    )
 
 
 @dataclass
@@ -177,8 +191,9 @@ class HostedVoiceService:
         self.store.reserve(user_id, stored_consent, name, normalize_settings({"modelId": self.cfg.default_model}), self.cfg.slot_limit)
         voice_id = None
         try:
-            voice_id = self.eleven.clone(name, files)
-            record = self.store.activate(user_id, voice_id, meta)
+            cloned = self.eleven.clone(name, files)
+            voice_id = cloned.voice_id
+            record = self.store.activate(user_id, voice_id, meta, cloned.requires_verification)
         except Exception as e:
             self._undo_create(user_id, name, voice_id, e)
             raise
@@ -234,7 +249,14 @@ class HostedVoiceService:
             raise HostedError(f"text is over {MAX_TEXT_CHARS} characters")
         s = normalize_settings(overrides, r.settings)
         t0 = time.perf_counter()
-        audio, ctype = self.eleven.synthesize(r.voice_id, text, s["modelId"], s, self.cfg.output_format)
+        try:
+            audio, ctype = self.eleven.synthesize(r.voice_id, text, s["modelId"], s, self.cfg.output_format)
+        except VoiceNeedsVerification:
+            if not r.needs_verification:
+                self.store.update(user_id, needs_verification=True)
+            raise NeedsVerification(verification_message(r.voice_name))
+        if r.needs_verification:  # it just spoke, so it has been verified
+            self.store.update(user_id, needs_verification=False)
         return audio, ctype, {"renderMs": round((time.perf_counter() - t0) * 1000), "modelId": s["modelId"]}
 
     def update_settings(self, user_id: str, patch: dict) -> VoiceRecord:

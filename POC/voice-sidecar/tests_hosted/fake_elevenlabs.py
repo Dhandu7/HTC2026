@@ -17,8 +17,14 @@ class FakeElevenLabs:
         self.voice_limit = voice_limit
         self.subscription = {"tier": "starter", "status": "active", "character_count": 1200, "character_limit": 75000, "voice_limit": 10, "voice_slots_used": 2, "can_use_instant_voice_cloning": True, "can_use_professional_voice_cloning": False, "current_overage": {"x": 1}}
         self.subscription_status = 200
+        self.require_verification = False  # new voices need verifying before they can speak, like the real thing
+        self.unverified = set()
         self._n = 0
         self.transport = httpx.MockTransport(self.handle)
+
+    def verify(self, voice_id):
+        """The owner completed verification in the ElevenLabs dashboard."""
+        self.unverified.discard(voice_id)
 
     def fail(self, op, status):
         self.fail_next.append((op, status))
@@ -53,13 +59,17 @@ class FakeElevenLabs:
             self._n += 1
             vid = f"voice{self._n:016d}"
             self.voices[vid] = {"name": name.group(1).decode(), "files": [f.decode() for f in files]}
-            return httpx.Response(200, json={"voice_id": vid, "requires_verification": False})
+            if self.require_verification:
+                self.unverified.add(vid)
+            return httpx.Response(200, json={"voice_id": vid, "requires_verification": vid in self.unverified})
         m = re.fullmatch(r"/v1/text-to-speech/([^/]+)", path)
         if req.method == "POST" and m:
             if (s := self._failing("speak")):
                 return httpx.Response(s, headers={"retry-after": "7"} if s == 429 else {}, json={"detail": {"message": "x"}})
             if m.group(1) not in self.voices:
                 return httpx.Response(404, json={"detail": {"status": "voice_not_found"}})
+            if m.group(1) in self.unverified:
+                return httpx.Response(403, json={"detail": {"status": "needs_verification", "message": "This voice requires verification. Please verify your voice to continue."}})
             body = json.loads(req.read())
             self.speak_calls.append({"voice_id": m.group(1), "query": dict(req.url.params), "body": body})
             return httpx.Response(200, content=b"ID3fake-mp3-bytes", headers={"content-type": "audio/mpeg"})

@@ -179,3 +179,22 @@ def test_the_post_deployment_check_notices_a_broken_slot_cap(store, monkeypatch)
     monkeypatch.setattr(store, "reserve", lambda u, c, n, s, limit: real(u, c, n, s, 10**6))  # a store that ignores the cap
     with pytest.raises(AssertionError, match="slot cap"):
         check_store(store)
+
+
+def test_the_needs_verification_flag_is_stored_shown_and_cleared(store):
+    reserve(store)
+    assert store.get("u1").needs_verification is False
+    r = store.activate("u1", "v", CLIPS, needs_verification=True)
+    assert r.needs_verification is True and r.public()["needsVerification"] is True
+    assert r.public()["voiceName"] == "vocaleyes-abc-1" and "secret" not in str(r.public())  # the name, never the voice id
+    assert store.get("u1").needs_verification is True
+    r = store.update("u1", needs_verification=False)
+    assert r.needs_verification is False and "needsVerification" not in r.public() and "voiceName" not in r.public()  # absent unless true
+    assert store.update("u1", needs_verification=True).needs_verification is True
+    assert store.update("u1", settings=SETTINGS).needs_verification is True  # unrelated changes leave it alone
+    assert store.update("u1", paused=True).needs_verification is True
+
+
+def test_an_ordinary_activation_does_not_need_verification(store):
+    reserve(store)
+    assert store.activate("u1", "v", CLIPS).needs_verification is False

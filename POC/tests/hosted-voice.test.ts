@@ -128,6 +128,15 @@ describe("inside the voice router", () => {
     expect(r.reason).toMatch(/too slow/);
   });
 
+  it("a voice waiting for verification is skipped without calling the service on every sentence", async () => {
+    const log: string[] = [];
+    const a = api(ok);
+    const r = await router(new HostedVoice(a, sink().s, () => false /* usable() is false until verified */), system(log), () => false).speak("Hello.").done;
+    expect(r.tier).toBe("system");
+    expect(a.calls).toEqual([]);
+    expect(r.ttfaMs).toBeLessThan(100); // no wasted round trip before the system voice speaks
+  });
+
   it("a paused or missing voice never reaches the service at all", async () => {
     const log: string[] = [];
     const a = api(ok);

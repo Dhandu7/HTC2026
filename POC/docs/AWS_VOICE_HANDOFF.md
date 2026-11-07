@@ -30,11 +30,12 @@ Read on 7 Nov 2026 from their docs and help center; re-check before relying on t
 - **Generated audio is retained by default.** Zero-retention (`enable_logging=false`) is for enterprise customers only ([API reference](https://elevenlabs.io/docs/api-reference/text-to-speech/convert)). The consent text discloses this.
 - **Endpoints used:** `POST /v1/voices/add` (multipart, returns `voice_id`), `POST /v1/text-to-speech/{voice_id}`, `DELETE /v1/voices/{voice_id}`; auth is the `xi-api-key` header. Regional endpoints (US, EU, India, Singapore) exist; set `ELEVENLABS_BASE_URL` to match your region.
 - **Fast models:** `eleven_flash_v2_5` and `eleven_v4_turbo` are listed at about 100 ms median before network time; the Turbo v2.5 model is deprecated ([models](https://elevenlabs.io/docs/overview/models)). Default is `eleven_flash_v2_5`.
+- **Verification:** ElevenLabs makes the owner verify a cloned voice (they read a short phrase aloud on the ElevenLabs website) before it will speak, even their own. `POST /v1/voices/add` returns `requires_verification`, and the API has no way to complete the step. Our service handles it: the voice is created and flagged `needsVerification`, the app tells the person what to do, and the first successful speak clears the flag. **Anyone who creates a voice needs an ElevenLabs login to verify it, or a plan/workspace arrangement that makes this work for end users. This is a product question for the team**, because our users cannot be assumed to have, or to be able to use, an ElevenLabs account.
 - **Consent:** ElevenLabs' policy appears to require the speaker's consent for cloning ([use policy](https://elevenlabs.io/use-policy)); I only saw that in secondary summaries, so someone should read the official text. Our flow already requires it.
 
 ## 3. What is built and tested (application side)
 
-All in `POC/voice-sidecar/`. `./hosted.sh setup` then `./hosted.sh test` runs **136 tests with no AWS account and no ElevenLabs key**.
+All in `POC/voice-sidecar/`. `./hosted.sh setup` then `./hosted.sh test` runs **189 tests with no AWS account and no ElevenLabs key**.
 
 | Piece | File | Notes |
 |---|---|---|
@@ -143,7 +144,7 @@ Single table, on-demand.
 ## 9. How to verify end to end once things exist
 
 ```bash
-cd POC/voice-sidecar && ./hosted.sh setup && ./hosted.sh test            # 136 tests, no cloud needed
+cd POC/voice-sidecar && ./hosted.sh setup && ./hosted.sh test            # 189 tests, no cloud needed
 VOICE_TABLE_NAME=... AWS_REGION=... ./hosted.sh check-table              # the real table
 ELEVENLABS_API_KEY=... ./hosted.sh smoke --clip my-voice.wav --i-am-the-voice-owner   # whoever holds the key
 ```

@@ -239,21 +239,32 @@ export function mountMyVoice(d: MyVoiceDeps): { open(): void } {
       h("h3", {}, "Try it"),
       h("textarea", { rows: 2, value: form.testText, oninput: (e: Event) => (form.testText = (e.target as HTMLTextAreaElement).value) }),
       h("button", { type: "button", class: "primary", disabled: state.busy || v.status !== "active", onclick: () => void controller.test(form.testText) }, "🔊 Speak in my voice"),
-      v.status !== "active" ? h("p", { class: "fine" }, "Resume the voice to try it.") : null,
+      v.status !== "active" ? h("p", { class: "fine" }, "Resume the voice to try it.") : v.needsVerification ? h("p", { class: "fine" }, "Until the voice is verified this speaks in the standard voice.") : null,
       h("p", { class: "fine" }, "Speech from this voice is AI-generated."),
     );
     const manage = h(
       "section",
       { class: "mv-card" },
       h("h3", {}, "Your voice"),
-      h("p", {}, v.status === "active" ? "✅ Active: VocalEyes speaks in it." : "⏸ Paused: VocalEyes uses the standard voice."),
+      h("p", {}, v.status === "paused" ? "⏸ Paused: VocalEyes uses the standard voice." : v.needsVerification ? "⏳ Created, waiting for verification: VocalEyes uses the standard voice for now." : "✅ Active: VocalEyes speaks in it."),
       h("p", { class: "fine" }, `${v.clips.length} recording${v.clips.length === 1 ? "" : "s"} used · ${secs.toFixed(0)} s · consent: ${v.consent.mode === "authorized" ? `permission from ${v.consent.authorizedBy ?? "the voice owner"}` : "own voice"}${v.consent.acknowledgedAt ? ` on ${new Date(v.consent.acknowledgedAt).toLocaleDateString()}` : ""}`),
       h("button", { type: "button", disabled: state.busy, onclick: () => void controller.setPaused(v.status === "active") }, v.status === "active" ? "Pause my voice" : "Resume my voice"),
       form.deleting
         ? h("div", { class: "mv-danger" }, h("p", {}, "This deletes your voice at ElevenLabs and here. It cannot be undone. Type ", h("b", {}, "delete"), " to confirm."), h("input", { type: "text", value: form.confirmDelete, oninput: (e: Event) => { form.confirmDelete = (e.target as HTMLInputElement).value; (root.querySelector(".mv-confirm") as HTMLButtonElement).disabled = form.confirmDelete !== "delete"; } }), h("button", { type: "button", class: "danger mv-confirm", disabled: form.confirmDelete !== "delete" || state.busy, onclick: async () => { await controller.remove(); form.deleting = false; form.confirmDelete = ""; draw(); } }, "Delete my voice"), h("button", { type: "button", onclick: () => { form.deleting = false; draw(); } }, "Cancel"))
         : h("button", { type: "button", class: "danger", onclick: () => { form.deleting = true; draw(); } }, "Delete my voice…"),
     );
-    return [manage, test, settings];
+    const verify: Node | null = v.needsVerification
+      ? h(
+          "section",
+          { class: "mv-card mv-verify" },
+          h("h3", {}, "⚠ Verify your voice at ElevenLabs"),
+          h("p", {}, "ElevenLabs will not let this voice speak until you confirm it is really yours. This is their safeguard, and it has to be done on their website:"),
+          h("ol", {}, h("li", {}, "Sign in to elevenlabs.io and open Voices."), h("li", {}, v.voiceName ? h("span", {}, "Find the voice named ", h("b", {}, v.voiceName), ".") : "Find the voice you just created."), h("li", {}, "Complete its verification: you read a short phrase aloud."), h("li", {}, "Come back here and press the button below.")),
+          h("button", { type: "button", class: "primary", disabled: state.busy, onclick: () => void controller.recheckVerification() }, "I've verified, check again"),
+          h("p", { class: "fine" }, "Until then, speech uses the standard voice. If verification keeps failing, ElevenLabs support can help."),
+        )
+      : null;
+    return [verify, manage, test, settings].filter((n): n is Node => !!n);
   }
 
   function draw() {

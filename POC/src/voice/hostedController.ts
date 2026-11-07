@@ -32,7 +32,7 @@ export interface UploadFile {
   blob: Blob;
 }
 
-type Api = Pick<HostedVoiceApi, "consentText" | "getVoice" | "createVoice" | "updateVoice" | "deleteVoice">;
+type Api = Pick<HostedVoiceApi, "consentText" | "getVoice" | "createVoice" | "updateVoice" | "deleteVoice" | "speak">;
 
 /** What to tell a person. Never shows technical detail, tokens, ids or request text. */
 export function describe(e: unknown): string {
@@ -101,6 +101,13 @@ export class HostedVoiceController {
     return this.state.voice?.status ?? null;
   }
 
+  /** Can the router use this voice right now? Not while it is paused, being deleted, or waiting to be verified:
+   *  a voice that cannot speak must not be tried on every sentence, or each one waits for the failure before falling back. */
+  usable(): boolean {
+    const v = this.state.voice;
+    return v?.status === "active" && !v.needsVerification;
+  }
+
   private set(patch: Partial<State>): void {
     this.state = { ...this.state, ...patch };
     this.subs.forEach((f) => f(this.state));
@@ -151,7 +158,17 @@ export class HostedVoiceController {
         },
         files,
       );
-      this.set({ voice: r.voice, phase: "ready", skipped: r.skippedClips, notice: r.skippedClips.length ? "Your voice is ready. Some recordings could not be used." : "Your voice is ready.", busy: false });
+      this.set({
+        voice: r.voice,
+        phase: "ready",
+        skipped: r.skippedClips,
+        notice: r.voice.needsVerification
+          ? "Your voice was created, but ElevenLabs needs you to verify it before it can speak. The steps are below."
+          : r.skippedClips.length
+            ? "Your voice is ready. Some recordings could not be used."
+            : "Your voice is ready.",
+        busy: false,
+      });
       return true;
     } catch (e) {
       const skipped = e instanceof HostedVoiceError ? (e.skippedClips ?? []) : [];
@@ -187,6 +204,7 @@ export class HostedVoiceController {
     this.set({ busy: true, error: null, notice: null });
     try {
       const r = await this.speakThroughRouter(t);
+      if (r.tier !== "cloned" && /verif/i.test(r.reason ?? "")) void this.refresh(true); // learn that it needs verifying
       const who = r.tier === "cloned" ? `your voice, ${r.ttfaMs} ms` : r.tier === "system" ? "the system voice" : "nothing";
       this.set({
         busy: false,
@@ -194,6 +212,21 @@ export class HostedVoiceController {
       });
     } catch (e) {
       this.set({ busy: false, error: describe(e) });
+    }
+  }
+
+  /** "I've verified it": try the voice once, directly, since the router skips a voice that needs verifying. */
+  async recheckVerification(): Promise<boolean> {
+    this.set({ busy: true, error: null, notice: null });
+    try {
+      await this.api.speak("Ready.");
+      await this.refresh();
+      this.set({ notice: "Verified. Your voice is ready to use.", busy: false });
+      return true;
+    } catch (e) {
+      await this.refresh(true);
+      this.set({ error: describe(e), busy: false });
+      return false;
     }
   }
 

@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from voice_sidecar.elevenlabs import DEFAULT_BASE_URL, ElevenLabsClient, ElevenLabsError, RemoteVoiceMissing  # noqa: E402
+from voice_sidecar.elevenlabs import DEFAULT_BASE_URL, ElevenLabsClient, ElevenLabsError, RemoteVoiceMissing, VoiceNeedsVerification  # noqa: E402
 from voice_sidecar.hosted import DEFAULT_SETTINGS, prepare_clips  # noqa: E402
 
 
@@ -53,14 +53,20 @@ def main() -> int:
     voice_id = None
     try:
         t = time.perf_counter()
-        voice_id = client.clone(f"vocaleyes-smoke-{secrets.token_hex(3)}", files)
+        cloned = client.clone(f"vocaleyes-smoke-{secrets.token_hex(3)}", files)
+        voice_id = cloned.voice_id
         print(f"created a temporary voice in {time.perf_counter() - t:.1f} s")
+        if cloned.requires_verification:
+            print("note: ElevenLabs says this voice needs verification before it can speak, so the next step will probably be refused.")
         t = time.perf_counter()
         audio, ctype = client.synthesize(voice_id, a.text, a.model, DEFAULT_SETTINGS)
         print(f"spoke {len(a.text)} characters in {(time.perf_counter() - t) * 1000:.0f} ms ({a.model}); {len(audio) // 1024} KB of {ctype}")
         Path(a.out).write_bytes(audio)
         print(f"wrote {a.out}: play it and judge whether it sounds like the owner")
         return 0
+    except VoiceNeedsVerification:
+        print("ElevenLabs will not let this voice speak until it is verified: in the ElevenLabs dashboard (Voices), open the voice and complete its verification (you read a short phrase aloud). The service's own flow works the same way: the voice is created, then verified there.", file=sys.stderr)
+        return 3
     except ElevenLabsError as e:
         print(f"ElevenLabs error ({e.status}): {e}", file=sys.stderr)
         return 1

@@ -143,3 +143,5 @@ body.overlay.collapsed #pill { cursor: pointer; }
 #myvoice .mv-conn { margin-top: 16px; color: var(--muted); }
 #myvoice .mv-danger { border: 1px solid var(--bad); border-radius: 10px; padding: 10px 14px; margin-top: 10px; }
 #myvoice input[type="range"] { flex: 1; max-width: 260px; }
+#myvoice .mv-verify { border-color: var(--accent-2); background: #2a2108; }
+#myvoice .mv-verify ol { margin: 8px 0 12px; padding-left: 22px; }

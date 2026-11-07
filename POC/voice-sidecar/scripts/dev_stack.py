@@ -2,6 +2,8 @@
 with no API key and no AWS:
 
   ./hosted.sh dev            # service on http://127.0.0.1:8790, fake ElevenLabs on :8794
+  FAKE_REQUIRE_VERIFICATION=1 ./hosted.sh dev   # new voices must be "verified" first, like the real thing;
+                                                # then   curl -X POST http://127.0.0.1:8794/fake/verify-all   verifies them
 
 The fake keeps voices in memory and "speaks" a tone whose length follows the text. It is NOT speech and it never
 talks to the internet. The service runs with in-memory records and dev login (X-User-Id header), which the server
@@ -24,6 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 FAKE_PORT = int(os.environ.get("FAKE_ELEVENLABS_PORT", "8794"))
 VOICES: "dict[str, dict]" = {}
+UNVERIFIED: "set[str]" = set()
+REQUIRE_VERIFICATION = os.environ.get("FAKE_REQUIRE_VERIFICATION") == "1"
 
 
 def tone(text: str, sr: int = 22050) -> bytes:
@@ -62,6 +66,9 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def do_POST(self):
+        if self.path == "/fake/verify-all":  # dev only: pretend the owner completed verification in the dashboard
+            UNVERIFIED.clear()
+            return self._json(200, {"verified": True})
         if not self._authed():
             return
         body = self.rfile.read(int(self.headers.get("content-length", 0)))
@@ -71,11 +78,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": [{"loc": ["body", "files"], "msg": "field required", "type": "missing"}]})
             vid = f"fake{len(VOICES) + 1:016d}"
             VOICES[vid] = {"files": len(files)}
-            return self._json(200, {"voice_id": vid, "requires_verification": False})
+            if REQUIRE_VERIFICATION:
+                UNVERIFIED.add(vid)
+            return self._json(200, {"voice_id": vid, "requires_verification": vid in UNVERIFIED})
         m = re.fullmatch(r"/v1/text-to-speech/([^/?]+)", self.path.split("?")[0])
         if m:
             if m.group(1) not in VOICES:
                 return self._json(404, {"detail": {"status": "voice_not_found"}})
+            if m.group(1) in UNVERIFIED:
+                return self._json(403, {"detail": {"status": "needs_verification", "message": "This voice requires verification. Please verify your voice to continue."}})
             text = json.loads(body).get("text", "")
             return self._send(200, tone(text), "audio/wav")
         self._json(404, {"detail": "not in the fake"})

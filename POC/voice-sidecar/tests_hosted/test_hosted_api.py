@@ -203,3 +203,16 @@ def test_the_browser_preflight_check_passes_for_the_app_origin_and_not_for_other
     other = ask("https://evil.example.com", "x-user-id")
     assert "access-control-allow-origin" not in other.headers  # a page from another site is not let in
     assert ask("http://localhost:5173", "x-something-else").status_code == 400  # and unknown headers are not blessed
+
+
+def test_the_verification_story_over_the_api(env):
+    client, store, fake = env
+    fake.require_verification = True
+    r = create(client)
+    assert r.status_code == 201 and r.json()["voice"]["needsVerification"] is True
+    name = store.get("alice").voice_name
+    s = client.post("/v1/me/voice/speak", headers=A("alice"), json={"text": "hi"})
+    assert s.status_code == 409 and name in s.json()["error"] and "API key" not in s.json()["error"]
+    fake.verify(store.get("alice").voice_id)
+    assert client.post("/v1/me/voice/speak", headers=A("alice"), json={"text": "hi"}).status_code == 200
+    assert "needsVerification" not in client.get("/v1/me/voice", headers=A("alice")).json()["voice"]

@@ -68,11 +68,14 @@ class VoiceRecord:
     updated_at: str
     version: int = 1
     provider: str = PROVIDER
+    #: ElevenLabs will not let the voice speak until its owner verifies it there. Set from the create response or
+    #: from a refusal, and cleared by the first successful speak after verification.
+    needs_verification: bool = False
 
     def public(self) -> dict:
         """What the signed-in user may see. The ElevenLabs voice_id is internal and never leaves the server."""
         c = self.consent
-        return {
+        view = {
             "status": self.status,
             "settings": self.settings,
             "consent": {k: c.get(k) for k in ("mode", "authorizedBy", "acknowledgedAt", "consentVersion") if c.get(k) is not None},
@@ -80,6 +83,10 @@ class VoiceRecord:
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
         }
+        if self.needs_verification:
+            view["needsVerification"] = True
+            view["voiceName"] = self.voice_name  # so the owner can find this voice in the ElevenLabs dashboard
+        return view
 
 
 class VoiceRecordStore(Protocol):
@@ -89,14 +96,14 @@ class VoiceRecordStore(Protocol):
         """Atomically take a voice slot and create the user's record in `pending`.
         AlreadyExists if the user already has a voice; SlotsExhausted if the account is at its cap."""
 
-    def activate(self, user_id: str, voice_id: str, clips: list) -> VoiceRecord:
+    def activate(self, user_id: str, voice_id: str, clips: list, needs_verification: bool = False) -> VoiceRecord:
         """pending -> active, recording the ElevenLabs voice_id."""
 
     def release(self, user_id: str) -> None:
         """Abandon a pending reservation and free its slot."""
 
-    def update(self, user_id: str, settings: Optional[dict] = None, paused: Optional[bool] = None) -> VoiceRecord:
-        """Change settings and/or pause or resume an active or paused voice."""
+    def update(self, user_id: str, settings: Optional[dict] = None, paused: Optional[bool] = None, needs_verification: Optional[bool] = None) -> VoiceRecord:
+        """Change settings, pause or resume, and/or set the needs-verification flag of an active or paused voice."""
 
     def begin_delete(self, user_id: str) -> VoiceRecord:
         """Mark the voice `deleting` (idempotent). From here the voice can no longer speak."""
@@ -156,10 +163,10 @@ class MemoryRecordStore:
             raise WrongState(f"voice is {r.status}, expected {' or '.join(states)}")
         return r
 
-    def activate(self, user_id, voice_id, clips):
+    def activate(self, user_id, voice_id, clips, needs_verification=False):
         with self._lock:
             r = self._need(user_id, "pending")
-            r.status, r.voice_id, r.clips = "active", voice_id, list(clips)
+            r.status, r.voice_id, r.clips, r.needs_verification = "active", voice_id, list(clips), bool(needs_verification)
             r.updated_at, r.version = self._now(), r.version + 1
             return _copy(r)
 
@@ -169,11 +176,13 @@ class MemoryRecordStore:
             del self._voices[user_id]
             self._used -= 1
 
-    def update(self, user_id, settings=None, paused=None):
+    def update(self, user_id, settings=None, paused=None, needs_verification=None):
         with self._lock:
             r = self._need(user_id, "active", "paused")
             if settings is not None:
                 r.settings = dict(settings)
+            if needs_verification is not None:
+                r.needs_verification = bool(needs_verification)
             if paused is not None:
                 r.status = "paused" if paused else "active"
             r.updated_at, r.version = self._now(), r.version + 1
@@ -209,7 +218,7 @@ class MemoryRecordStore:
 
 
 def _copy(r: VoiceRecord) -> VoiceRecord:
-    return VoiceRecord(r.user_id, r.status, r.voice_name, r.voice_id, dict(r.settings), dict(r.consent), [dict(c) for c in r.clips], r.created_at, r.updated_at, r.version, r.provider)
+    return VoiceRecord(r.user_id, r.status, r.voice_name, r.voice_id, dict(r.settings), dict(r.consent), [dict(c) for c in r.clips], r.created_at, r.updated_at, r.version, r.provider, r.needs_verification)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -287,7 +296,7 @@ class DynamoRecordStore:
 
     def _record(self, item: dict) -> VoiceRecord:
         d = self._d(item)
-        return VoiceRecord(d["userId"], d["status"], d["voiceName"], d.get("voiceId"), d["settings"], d["consent"], d.get("clips", []), d["createdAt"], d["updatedAt"], d.get("version", 1), d.get("provider", PROVIDER))
+        return VoiceRecord(d["userId"], d["status"], d["voiceName"], d.get("voiceId"), d["settings"], d["consent"], d.get("clips", []), d["createdAt"], d["updatedAt"], d.get("version", 1), d.get("provider", PROVIDER), bool(d.get("needsVerification", False)))
 
     def _reasons(self, err) -> "list[str]":
         return [r.get("Code", "") for r in err.response.get("CancellationReasons", [])]
@@ -318,6 +327,7 @@ class DynamoRecordStore:
             "settings": settings,
             "consent": consent,
             "clips": [],
+            "needsVerification": False,
             "createdAt": now,
             "updatedAt": now,
             "version": 1,
@@ -387,8 +397,10 @@ class DynamoRecordStore:
             raise
         return self._record(r["Attributes"])
 
-    def activate(self, user_id, voice_id, clips):
-        return self._set_status(user_id, "active", ["pending"], ["#vid = :vid", "#clips = :clips"], {":vid": voice_id, ":clips": list(clips)}, {"#vid": "voiceId", "#clips": "clips"})
+    def activate(self, user_id, voice_id, clips, needs_verification=False):
+        return self._set_status(
+            user_id, "active", ["pending"], ["#vid = :vid", "#clips = :clips", "#nv = :nv"], {":vid": voice_id, ":clips": list(clips), ":nv": bool(needs_verification)}, {"#vid": "voiceId", "#clips": "clips", "#nv": "needsVerification"}
+        )
 
     def release(self, user_id):
         from botocore.exceptions import ClientError
@@ -425,7 +437,7 @@ class DynamoRecordStore:
                 raise WrongState(f"voice is {cur.status}, expected pending")
             raise
 
-    def update(self, user_id, settings=None, paused=None):
+    def update(self, user_id, settings=None, paused=None, needs_verification=None):
         cur = self.get(user_id)
         if cur is None:
             raise RecordNotFound("no voice for this user")
@@ -435,6 +447,10 @@ class DynamoRecordStore:
             extra.append("#settings = :settings")
             vals[":settings"] = dict(settings)
             names["#settings"] = "settings"
+        if needs_verification is not None:
+            extra.append("#nv = :nv")
+            vals[":nv"] = bool(needs_verification)
+            names["#nv"] = "needsVerification"
         return self._set_status(user_id, to, ["active", "paused"], extra, vals, names)
 
     def begin_delete(self, user_id):

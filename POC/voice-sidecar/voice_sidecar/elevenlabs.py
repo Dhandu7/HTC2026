@@ -12,7 +12,7 @@ URL, and never included in an error message. Request text and audio are not logg
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import httpx
 
@@ -38,6 +38,17 @@ class ElevenLabsError(Exception):
         super().__init__(message)
         self.status = status
         self.retry_after = retry_after
+
+
+class VoiceNeedsVerification(ElevenLabsError):
+    """ElevenLabs will not let this voice speak until its owner verifies it (reads a short phrase aloud in their
+    dashboard). It is a consent safeguard on their side, and the API offers no way to complete it."""
+
+
+class CloneResult(NamedTuple):
+    voice_id: str
+    #: True when ElevenLabs says the new voice must be verified before it can be used.
+    requires_verification: bool
 
 
 class RemoteVoiceMissing(ElevenLabsError):
@@ -68,6 +79,9 @@ def _raise_for(resp: httpx.Response, what: str) -> None:
     code = resp.status_code
     if code < 400:
         return
+    if code in (400, 401, 403, 422) and re.search(r"verif", _detail(resp), re.I):
+        # Checked before the generic 401/403 branch: a voice that needs verifying is not a key or plan problem.
+        raise VoiceNeedsVerification(f"{what}: ElevenLabs needs this voice verified before it can speak.", 409)
     if code == 404:
         raise RemoteVoiceMissing(f"{what}: not found at ElevenLabs", 404)
     if code in (401, 403):
@@ -107,17 +121,18 @@ class ElevenLabsClient:
             raise ElevenLabsError("invalid voice id", 400)
         return voice_id
 
-    def clone(self, name: str, clips: "list[tuple[str, bytes]]", remove_background_noise: bool = False, description: Optional[str] = None) -> str:
-        """Create a voice from WAV clips [(filename, bytes)]. Returns the new voice_id."""
+    def clone(self, name: str, clips: "list[tuple[str, bytes]]", remove_background_noise: bool = False, description: Optional[str] = None) -> CloneResult:
+        """Create a voice from WAV clips [(filename, bytes)]. Returns the new voice_id and whether it needs verifying."""
         files = [("files", (fn, data, "audio/wav")) for fn, data in clips]
         data = {"name": name, "remove_background_noise": "true" if remove_background_noise else "false"}
         if description:
             data["description"] = description
         resp = self._send("create voice", "POST", "/v1/voices/add", data=data, files=files)
-        voice_id = resp.json().get("voice_id")
+        body = resp.json()
+        voice_id = body.get("voice_id")
         if not voice_id:
             raise ElevenLabsError("create voice: ElevenLabs returned no voice id", 502)
-        return self._voice(voice_id)
+        return CloneResult(self._voice(voice_id), bool(body.get("requires_verification")))
 
     def synthesize(self, voice_id: str, text: str, model_id: str, voice_settings: dict, output_format: str = "mp3_44100_128") -> "tuple[bytes, str]":
         """Speak `text` in the voice. Returns (audio bytes, content type)."""

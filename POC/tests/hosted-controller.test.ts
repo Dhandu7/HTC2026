@@ -16,6 +16,7 @@ function setup(over: Partial<Record<string, (...a: any[]) => any>> = {}) {
     createVoice: async (_c: unknown, _f: unknown) => ({ voice: voice(), skippedClips: [] }),
     updateVoice: async (_p: unknown) => voice(),
     deleteVoice: async () => undefined,
+    speak: async (_t: string) => ({ audio: new ArrayBuffer(0), contentType: "audio/mpeg", renderMs: 1 }),
     ...over,
   };
   const wrapped = Object.fromEntries(Object.entries(api).map(([k, f]) => [k, (...a: unknown[]) => (calls.push(k), (f as (...x: unknown[]) => unknown)(...a))])) as unknown as typeof api;
@@ -184,7 +185,7 @@ describe("using and managing the voice", () => {
   });
 
   it("a test that fell back to the system voice says so, and why", async () => {
-    const c = new HostedVoiceController({ consentText: async () => CONSENT, getVoice: async () => voice(), createVoice: async () => ({ voice: voice(), skippedClips: [] }), updateVoice: async () => voice(), deleteVoice: async () => undefined }, async () => ({ tier: "system", ttfaMs: 90, fellBack: true, reason: "cloned too slow (>2500 ms)" }));
+    const c = new HostedVoiceController({ consentText: async () => CONSENT, getVoice: async () => voice(), createVoice: async () => ({ voice: voice(), skippedClips: [] }), updateVoice: async () => voice(), deleteVoice: async () => undefined, speak: async () => ({ audio: new ArrayBuffer(0), contentType: "audio/mpeg", renderMs: 1 }) }, async () => ({ tier: "system", ttfaMs: 90, fellBack: true, reason: "cloned too slow (>2500 ms)" }));
     await c.refresh();
     await c.test("Hello.");
     expect(c.state.notice).toBe("Spoken in the system voice because your voice was too slow to answer.");
@@ -248,5 +249,75 @@ describe("messages for people", () => {
     expect(explained).toMatch(/text to speech and voices/);
     expect(describeError(new HostedVoiceError("speak: ElevenLabs refused the request. Check the API key, its permissions and the plan.", "upstream", 502))).toMatch(/usually means the API key is missing or wrong/);
     expect(describeError(new HostedVoiceError("create voice: ElevenLabs returned an error (HTTP 500)", "upstream", 502))).toBe("The voice provider (ElevenLabs) had a problem. Try again in a moment.");
+  });
+});
+
+
+describe("a voice that ElevenLabs wants verified", () => {
+  const needsIt = (): VoiceView => ({ ...voice("active"), needsVerification: true, voiceName: "vocaleyes-abc123-def456" });
+
+  it("is created, but not offered to the router, and the person is told what to do", async () => {
+    const { c } = setup({ createVoice: async () => ({ voice: needsIt(), skippedClips: [] }) });
+    await c.refresh();
+    expect(await c.create(ALL_OK, FILES)).toBe(true);
+    expect(c.state.phase).toBe("ready");
+    expect(c.state.notice).toMatch(/needs you to verify it before it can speak/);
+    expect(c.status()).toBe("active"); // it exists...
+    expect(c.usable()).toBe(false); // ...but the router must not try it on every sentence
+  });
+
+  it("an active, verified voice is usable; a paused or missing one is not", async () => {
+    const a = setup({ getVoice: async () => voice("active") });
+    await a.c.refresh();
+    expect(a.c.usable()).toBe(true);
+    const b = setup({ getVoice: async () => voice("paused") });
+    await b.c.refresh();
+    expect(b.c.usable()).toBe(false);
+    const c2 = setup();
+    await c2.c.refresh();
+    expect(c2.c.usable()).toBe(false);
+  });
+
+  it("'I've verified' tries the voice once, and when it speaks the voice becomes usable", async () => {
+    let verified = false;
+    const speakCalls: string[] = [];
+    const { c } = setup({
+      getVoice: async () => (verified ? voice("active") : needsIt()),
+      speak: async (t: string) => {
+        speakCalls.push(t);
+        if (!verified) throw new HostedVoiceError("ElevenLabs needs you to verify this voice before it can speak. Sign in to elevenlabs.io", "conflict", 409);
+        return { audio: new ArrayBuffer(0), contentType: "audio/mpeg", renderMs: 1 };
+      },
+    });
+    await c.refresh();
+    expect(c.usable()).toBe(false);
+    expect(await c.recheckVerification()).toBe(false); // not verified yet: says why, stays unusable
+    expect(c.state.error).toMatch(/verify this voice before it can speak/);
+    expect(c.usable()).toBe(false);
+    verified = true; // the owner completed it at ElevenLabs
+    expect(await c.recheckVerification()).toBe(true);
+    expect(c.usable()).toBe(true);
+    expect(c.state).toMatchObject({ notice: "Verified. Your voice is ready to use.", error: null });
+    expect(speakCalls).toEqual(["Ready.", "Ready."]); // a tiny phrase: it costs a few characters, no more
+  });
+
+  it("a test that falls back because of verification refreshes so the screen shows the verify steps", async () => {
+    let n = 0;
+    const calls: string[] = [];
+    const api = {
+      consentText: async () => CONSENT,
+      getVoice: async () => (calls.push("getVoice"), n++ === 0 ? voice("active") : needsIt()),
+      createVoice: async () => ({ voice: voice(), skippedClips: [] }),
+      updateVoice: async () => voice(),
+      deleteVoice: async () => undefined,
+      speak: async () => ({ audio: new ArrayBuffer(0), contentType: "audio/mpeg", renderMs: 1 }),
+    };
+    const c = new HostedVoiceController(api, async () => ({ tier: "system", ttfaMs: 50, fellBack: true, reason: "cloned failed: ElevenLabs needs you to verify this voice before it can speak." }));
+    await c.refresh();
+    expect(c.usable()).toBe(true);
+    await c.test("Hello.");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(c.state.voice?.needsVerification).toBe(true);
+    expect(c.usable()).toBe(false);
   });
 });

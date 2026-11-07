@@ -283,9 +283,9 @@ let voiceApiSettings: VoiceApiSettings = loadVoiceApiSettings(localStorage);
 const voiceApi = new HostedVoiceApi(apiConfigFrom(() => voiceApiSettings));
 const voiceCtl = new HostedVoiceController(voiceApi, async (text) => (await voice.speak(text).done));
 const voice = new VoiceRouter({
-  providers: [new HostedVoice(voiceApi, new BrowserAudioSink(), () => voiceCtl.status() === "active"), new SystemVoice()],
+  providers: [new HostedVoice(voiceApi, new BrowserAudioSink(), () => voiceCtl.usable()), new SystemVoice()],
   // The service is the source of truth for consent: the cloned tier is allowed only while the voice is active there.
-  policy: () => ({ allows: (tier) => tier === "system" || (tier === "cloned" && voiceCtl.status() === "active") }),
+  policy: () => ({ allows: (tier) => tier === "system" || (tier === "cloned" && voiceCtl.usable()) }),
   // Over the network the first sound takes longer than a local clip; past this the system voice speaks instead.
   startBudgetMs: { cloned: 2500 },
   onResult: () => updateStatus(),
@@ -305,6 +305,7 @@ $("#voice-btn").addEventListener("click", () => myVoice.open());
 function voiceStatusText(): string {
   const st = voiceCtl.status();
   const last = voice.last;
+  if (st === "active" && !voiceCtl.usable()) return "🗣 my voice needs verifying";
   if (st === "active") {
     return last && last.tier === "system" && last.fellBack ? `🗣 system voice: ${friendlyReason(last.reason) || "my voice unavailable"}` : last?.tier === "cloned" ? `🗣 my voice · ${last.ttfaMs} ms` : "🗣 my voice ready";
   }

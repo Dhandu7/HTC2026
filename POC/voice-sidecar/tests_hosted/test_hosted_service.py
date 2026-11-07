@@ -16,6 +16,7 @@ from voice_sidecar.hosted import (
     HostedConfig,
     HostedError,
     HostedVoiceService,
+    NeedsVerification,
     VoiceNotFound,
     VoiceNotReady,
     VoicePaused,
@@ -295,3 +296,46 @@ def test_the_reconciler_leaves_fresh_records_alone(env):
     store.reserve("u2", {"mode": "self"}, "n", {}, 5)
     assert svc.reconcile() == {"deleted": 0, "deleteFailed": 0, "releasedPending": 0}
     assert store.get("u2").status == "pending"
+
+
+# ---------------- ElevenLabs wants the voice verified ----------------
+
+
+def test_a_voice_that_needs_verifying_is_created_and_flagged(env):
+    svc, store, fake = env
+    fake.require_verification = True
+    r, _ = svc.create("u1", CONSENT, UPLOADS())
+    assert r.status == "active" and r.needs_verification is True and r.public()["needsVerification"] is True
+
+
+def test_speaking_before_verification_explains_what_to_do_and_names_the_voice(env):
+    svc, store, fake = env
+    fake.require_verification = True
+    r, _ = svc.create("u1", CONSENT, UPLOADS())
+    with pytest.raises(NeedsVerification) as e:
+        svc.speak("u1", "Hello.")
+    msg = str(e.value)
+    assert e.value.status == 409 and r.voice_name in msg and "elevenlabs.io" in msg and "read a short phrase aloud" in msg
+    assert "API key" not in msg  # not a key problem
+
+
+def test_after_the_owner_verifies_at_elevenlabs_the_next_speak_works_and_clears_the_flag(env):
+    svc, store, fake = env
+    fake.require_verification = True
+    r, _ = svc.create("u1", CONSENT, UPLOADS())
+    with pytest.raises(NeedsVerification):
+        svc.speak("u1", "Hello.")
+    assert store.get("u1").needs_verification is True
+    fake.verify(r.voice_id)
+    audio, ctype, _ = svc.speak("u1", "Hello.")
+    assert audio and store.get("u1").needs_verification is False
+
+
+def test_a_refusal_with_no_flag_yet_sets_it(env):
+    svc, store, fake = env
+    r, _ = svc.create("u1", CONSENT, UPLOADS())  # ElevenLabs did not flag it at creation...
+    assert r.needs_verification is False
+    fake.unverified.add(r.voice_id)  # ...but asks for verification later
+    with pytest.raises(NeedsVerification):
+        svc.speak("u1", "Hello.")
+    assert store.get("u1").needs_verification is True
