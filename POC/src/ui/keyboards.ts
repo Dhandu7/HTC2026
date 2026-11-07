@@ -1,0 +1,340 @@
+// The two keyboards compared in the demo:
+//  - GazeTypeKeyboard: 16 large targets (4x4) sized for 2–3° webcam error;
+//    8 letter-group keys + prediction chips + personal phrases + abbreviation expansion.
+//  - BaselineKeyboard: a standard letter-by-letter dwell QWERTY (optional word chips).
+import { LETTER_GROUPS, tokenize, type PredictionEngine, type Slot, type Suggestion } from "../predict/engine";
+import { llmPredict } from "../predict/llm";
+import type { EventKind } from "../metrics/session";
+
+export interface KeyboardHost {
+  /** Re-render requested (state changed asynchronously, e.g. LLM results arrived). */
+  refresh(): void;
+  /** Action keys that leave the keyboard (speak, insert, hide, recalibrate, settings). */
+  action(name: string): void;
+  overlay: boolean;
+}
+
+export interface Keyboard {
+  readonly name: string;
+  render(root: HTMLElement): void;
+  /** Handle a selected target id; returns what kind of selection it was (for metrics). */
+  select(id: string): EventKind;
+  text(): string;
+  clear(): void;
+}
+
+const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+const btn = (id: string, label: string, cls = "", sub = "") =>
+  `<button class="key ${cls}" data-target="${esc(id)}"><span class="lbl">${label}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</button>`;
+
+type Panel = "main" | "phrases" | "menu" | { letters: string };
+
+export class GazeTypeKeyboard implements Keyboard {
+  readonly name = "gazetype";
+  committed: string[] = [];
+  slots: Slot[] = [];
+  spellMode = false;
+  private panel: Panel = "main";
+  private chips: Suggestion[] = [];
+  private llmChips: Suggestion[] = [];
+  private panelItems: Suggestion[] = [];
+  private llmSeq = 0;
+
+  constructor(
+    private engine: PredictionEngine,
+    private host: KeyboardHost,
+  ) {}
+
+  text() {
+    return this.committed.join(" ");
+  }
+
+  clear() {
+    this.committed = [];
+    this.slots = [];
+    this.panel = "main";
+    this.update();
+  }
+
+  private committedTokens() {
+    return tokenize(this.text());
+  }
+
+  /** Recompute local suggestions now, and kick off an LLM request in the background. */
+  update() {
+    const words = this.committedTokens();
+    this.chips = this.engine.suggest(words, this.slots, 4, 1);
+    this.llmChips = [];
+    const seq = ++this.llmSeq;
+    // Ask the LLM for sentence continuations once there is some context and no word in progress.
+    if (!this.slots.length && words.length >= 1) {
+      void llmPredict({ task: "continue", text: this.text(), history: this.engine.topPhrases(8), n: 2 }).then((s) => {
+        if (seq !== this.llmSeq) return;
+        this.llmChips = s
+          .map((full) => full.trim())
+          .filter((full) => full.toLowerCase() !== this.text().toLowerCase())
+          .map((full) => ({ kind: "llm" as const, label: full.slice(this.text().length).trim(), text: full, score: 0 }))
+          .filter((c) => c.label);
+        this.host.refresh();
+      });
+    }
+  }
+
+  /** Chips shown: local first, then at most one LLM sentence in the last slot. */
+  private visibleChips(): (Suggestion | null)[] {
+    const out: (Suggestion | null)[] = this.chips.slice(0, 4);
+    if (this.llmChips.length) out.splice(3, 1, this.llmChips[0]);
+    while (out.length < 4) out.push(null);
+    return out;
+  }
+
+  private preview(): string {
+    if (!this.slots.length) return "";
+    const top = this.chips.find((c) => c.kind === "word");
+    return top ? top.text : this.slots.map((s) => (s.length === 1 ? s : "·")).join("");
+  }
+
+  render(root: HTMLElement) {
+    root.className = "board gazetype";
+    const p = this.panel;
+    if (p === "main") {
+      const chips = this.visibleChips()
+        .map((c, i) =>
+          c
+            ? btn(`chip:${i}`, esc(c.kind === "word" ? c.label : `${c.label}`), `chip ${c.kind}`, c.kind === "llm" ? "✨ AI" : c.kind === "phrase" ? "phrase" : "")
+            : `<div class="key chip empty"></div>`,
+        )
+        .join("");
+      const groups = LETTER_GROUPS.map((g, i) => btn(`g:${i}`, g.toUpperCase(), "group")).join("");
+      const phrasesLabel = this.slots.length >= 2 ? "✨ Expand" : "💬 Phrases";
+      const phrasesSub = this.slots.length >= 2 ? "initials → sentence" : "";
+      root.innerHTML =
+        chips +
+        groups +
+        btn("del", "⌫", "ctrl", this.slots.length ? "letter" : "word") +
+        btn("space", "␣", "ctrl", this.slots.length ? "accept" : "") +
+        btn("phrases", phrasesLabel, "ctrl", phrasesSub) +
+        btn("menu", "☰ Done", "ctrl", this.host.overlay ? "speak / insert" : "speak");
+    } else if (p === "phrases") {
+      const items = this.panelItems.slice(0, 6);
+      root.innerHTML =
+        items.map((s, i) => btn(`pi:${i}`, esc(s.label), `phrase-item ${s.kind}`, s.kind === "llm" ? "✨ AI" : "")).join("") +
+        Array.from({ length: 6 - items.length }, () => `<div class="key empty"></div>`).join("") +
+        btn("back", "↩ Back", "ctrl") +
+        btn("menu", "☰ Done", "ctrl");
+      root.className = "board gazetype panel2x4";
+    } else if (p === "menu") {
+      root.innerHTML =
+        btn("act:speak", "🔊 Speak", "action") +
+        (this.host.overlay ? btn("act:insert", "📋 Insert", "action", "into app") : btn("act:copy", "📋 Copy", "action")) +
+        btn("act:clear", "🗑 Clear", "action") +
+        btn("act:spell", this.spellMode ? "Spell: ON" : "Spell: OFF", "action", "exact letters") +
+        btn("act:recal", "◎ Recalibrate", "action") +
+        (this.host.overlay ? btn("act:hide", "✖ Hide", "action") : btn("act:settings", "⚙ Settings", "action")) +
+        btn("back", "↩ Back", "ctrl") +
+        btn("act:benchmark-done", "⏱ Finish run", "action");
+      root.className = "board gazetype panel2x4";
+    } else {
+      const letters = p.letters.split("");
+      root.innerHTML =
+        letters.map((l) => btn(`l:${l}`, l.toUpperCase(), "group")).join("") +
+        Array.from({ length: 4 - letters.length }, () => `<div class="key empty"></div>`).join("") +
+        btn("back", "↩ Back", "ctrl");
+      root.className = "board gazetype panel-letters";
+    }
+  }
+
+  /** Text shown in the output bar, with the in-progress word highlighted. */
+  displayHtml(): string {
+    const pv = this.preview();
+    return `${esc(this.text())}${pv ? ` <span class="pending">${esc(pv)}</span>` : ""}<span class="caret"></span>`;
+  }
+
+  private commitWord(w: string) {
+    this.committed.push(this.committed.length === 0 ? cap(w) : w === "i" ? "I" : w);
+    this.slots = [];
+  }
+
+  private commitSentence(full: string) {
+    this.committed = full.trim().split(/\s+/);
+    this.slots = [];
+  }
+
+  private openPhrases() {
+    this.panel = "phrases";
+    if (this.slots.length >= 2) {
+      const slots = [...this.slots];
+      this.panelItems = this.engine.expandInitials(slots, 6);
+      const seq = ++this.llmSeq;
+      void llmPredict({ task: "expand", text: this.text(), slots, history: this.engine.topPhrases(8), n: 4 }).then((s) => {
+        if (seq !== this.llmSeq || this.panel !== "phrases") return;
+        const have = new Set(this.panelItems.map((p) => p.text.toLowerCase()));
+        for (const full of s) if (!have.has(full.toLowerCase())) this.panelItems.push({ kind: "llm", label: full, text: full, score: 0 });
+        this.host.refresh();
+      });
+    } else {
+      this.panelItems = this.engine.topPhrases(6).map((t) => ({ kind: "phrase" as const, label: t, text: t, score: 0 }));
+    }
+  }
+
+  select(id: string): EventKind {
+    const [kind, arg] = id.split(":");
+    let ev: EventKind = "other";
+    switch (kind) {
+      case "g": {
+        const g = LETTER_GROUPS[Number(arg)];
+        if (this.spellMode) {
+          this.panel = { letters: g };
+          return "letter";
+        }
+        this.slots.push(g);
+        ev = "letter";
+        break;
+      }
+      case "l":
+        this.slots.push(arg);
+        this.panel = "main";
+        ev = "letter";
+        break;
+      case "chip": {
+        const c = this.visibleChips()[Number(arg)];
+        if (!c) return "other";
+        if (c.kind === "word") {
+          this.commitWord(c.text);
+          ev = "word";
+        } else if (c.kind === "phrase") {
+          this.slots = [];
+          this.commitSentence(`${this.text()} ${c.text}`);
+          ev = "phrase";
+        } else {
+          this.commitSentence(c.text);
+          ev = "phrase";
+        }
+        break;
+      }
+      case "space": {
+        if (this.slots.length) {
+          const top = this.chips.find((c) => c.kind === "word");
+          const literal = this.slots.every((s) => s.length === 1) ? this.slots.join("") : null;
+          this.commitWord(top?.text ?? literal ?? this.slots.map((s) => s[0]).join(""));
+        }
+        ev = "space";
+        break;
+      }
+      case "del":
+        if (this.slots.length) this.slots.pop();
+        else this.committed.pop();
+        ev = "delete";
+        break;
+      case "phrases":
+        this.openPhrases();
+        this.host.refresh();
+        return "expand";
+      case "pi": {
+        const it = this.panelItems[Number(arg)];
+        if (!it) return "other";
+        // Expansion results replace the abbreviation; stored phrases start a new sentence or replace.
+        this.commitSentence(this.slots.length >= 2 ? `${this.text()} ${it.text}` : it.text);
+        this.panel = "main";
+        ev = "phrase";
+        break;
+      }
+      case "menu":
+        this.panel = "menu";
+        return "other";
+      case "back":
+        this.panel = "main";
+        return "other";
+      case "act":
+        if (arg === "spell") {
+          this.spellMode = !this.spellMode;
+          return "other";
+        }
+        if (arg === "clear") {
+          this.clear();
+          this.panel = "main";
+          return "delete";
+        }
+        this.panel = "main";
+        this.host.action(arg);
+        return "other";
+    }
+    this.update();
+    return ev;
+  }
+}
+
+const QWERTY = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+
+export class BaselineKeyboard implements Keyboard {
+  readonly name = "baseline-qwerty";
+  value = "";
+  private chips: Suggestion[] = [];
+
+  constructor(
+    private engine: PredictionEngine,
+    private host: KeyboardHost,
+    public withPrediction = false,
+  ) {}
+
+  text() {
+    return this.value;
+  }
+
+  clear() {
+    this.value = "";
+    this.update();
+  }
+
+  private update() {
+    if (!this.withPrediction) return;
+    const words = tokenize(this.value);
+    const partial = /[a-z']$/i.test(this.value) ? words.pop() ?? "" : "";
+    this.chips = partial ? this.engine.wordCandidates(words, [...partial.toLowerCase()], 3) : this.engine.nextWords(words, 3);
+  }
+
+  render(root: HTMLElement) {
+    root.className = "board baseline";
+    const chips = this.withPrediction
+      ? `<div class="row chips">${[0, 1, 2].map((i) => (this.chips[i] ? btn(`chip:${i}`, esc(this.chips[i].label), "chip word") : `<div class="key chip empty"></div>`)).join("")}</div>`
+      : "";
+    root.innerHTML =
+      chips +
+      QWERTY.map((r) => `<div class="row">${[...r].map((c) => btn(`k:${c}`, c.toUpperCase())).join("")}</div>`).join("") +
+      `<div class="row">${btn("del", "⌫", "ctrl")}${btn("space", "space", "ctrl wide")}${btn("act:speak", "🔊", "ctrl")}${btn(
+        "act:benchmark-done",
+        "⏱",
+        "ctrl",
+      )}${this.host.overlay ? btn("act:insert", "📋", "ctrl") : ""}</div>`;
+  }
+
+  displayHtml() {
+    return `${esc(this.value)}<span class="caret"></span>`;
+  }
+
+  select(id: string): EventKind {
+    const [kind, arg] = id.split(":");
+    let ev: EventKind = "other";
+    if (kind === "k") {
+      this.value += this.value.length === 0 ? arg.toUpperCase() : arg;
+      ev = "letter";
+    } else if (kind === "space") {
+      this.value += " ";
+      ev = "space";
+    } else if (kind === "del") {
+      this.value = this.value.slice(0, -1);
+      ev = "delete";
+    } else if (kind === "chip") {
+      const c = this.chips[Number(arg)];
+      if (c) {
+        this.value = this.value.replace(/[a-z']*$/i, "") + c.text + " ";
+        ev = "word";
+      }
+    } else if (kind === "act") {
+      this.host.action(arg);
+    }
+    this.update();
+    return ev;
+  }
+}

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GazeType</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <div id="output" aria-live="polite"></div>
+        <nav id="controls">
+          <button id="kb-toggle" type="button">Keyboard: GazeType</button>
+          <button id="bench-btn" type="button">⏱ Benchmark</button>
+          <button id="results-btn" type="button">📊 Results</button>
+          <button id="recal" type="button">◎ Calibrate</button>
+          <button id="settings-btn" type="button">⚙</button>
+        </nav>
+      </header>
+      <div id="target-bar" hidden></div>
+      <main id="board" class="board"></main>
+      <footer id="status"></footer>
+    </div>
+
+    <section id="home">
+      <div class="home-card">
+        <h1>GazeType</h1>
+        <p>Type with your eyes using any webcam. Prediction-first, large targets, on-device.</p>
+        <div class="home-actions">
+          <button id="start-camera" class="primary" type="button">👁 Start with camera</button>
+          <button id="start-mouse" type="button">🖱 Mouse mode (demo / dev)</button>
+        </div>
+        <p class="home-msg"></p>
+        <p class="fine">Video never leaves this device. Communication aid prototype — not a medical device.</p>
+        <p class="fine" id="shortcut-hint"></p>
+      </div>
+    </section>
+
+    <div id="calibration" hidden></div>
+    <div id="cursor" hidden></div>
+    <div id="toast" hidden></div>
+    <div id="pill" title="GazeType"><span>👁</span></div>
+    <video id="video" playsinline muted></video>
+
+    <dialog id="settings">
+      <form method="dialog">
+        <h2>Settings</h2>
+        <label>Selection
+          <select name="selectionMode">
+            <option value="dwell">Dwell</option>
+            <option value="blink">Deliberate blink (dwell-free)</option>
+            <option value="click">Click only</option>
+          </select>
+        </label>
+        <label>GazeType dwell (ms) <input name="dwellMs" type="number" min="200" max="3000" step="50" /></label>
+        <label>Baseline dwell (ms) <input name="baselineDwellMs" type="number" min="200" max="3000" step="50" /></label>
+        <label><input name="baselinePrediction" type="checkbox" /> Word prediction on baseline keyboard</label>
+        <label>Screen diagonal (in) <input name="screenDiagonalIn" type="number" min="7" max="40" step="0.1" /></label>
+        <label>Viewing distance (cm, 0 = estimate) <input name="distanceCm" type="number" min="0" max="150" step="1" /></label>
+        <label>Camera horizontal FOV (°) <input name="hfovDeg" type="number" min="30" max="120" step="1" /></label>
+        <label><input name="showCursor" type="checkbox" /> Show gaze cursor (sized to measured error)</label>
+        <label><input name="hotCorner" type="checkbox" /> Overlay: open by looking at top-right corner</label>
+        <label><input name="voice" type="checkbox" /> Offline voice commands (“gaze type”, “hide keyboard”)</label>
+        <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Save</button></menu>
+      </form>
+    </dialog>
+
+    <dialog id="results">
+      <h2>Benchmark results</h2>
+      <div class="body"></div>
+      <menu>
+        <button id="export-runs" type="button">Export JSON</button>
+        <button id="clear-runs" type="button">Clear</button>
+        <form method="dialog"><button class="primary">Close</button></form>
+      </menu>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

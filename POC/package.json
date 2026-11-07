@@ -1,0 +1,53 @@
+{
+  "name": "gazetype",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Webcam-only eye-gaze communicator with prediction-first, large-target typing.",
+  "type": "module",
+  "scripts": {
+    "setup": "node scripts/setup-assets.mjs",
+    "postinstall": "node scripts/setup-assets.mjs --wasm-only",
+    "dev": "vite",
+    "dev:all": "concurrently -k -n web,llm \"vite\" \"tsx server/llm.ts\"",
+    "llm": "tsx server/llm.ts",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "overlay": "concurrently -k -n web,app \"vite\" \"wait-on tcp:5173 && node scripts/electron-dev.mjs\"",
+    "overlay:all": "concurrently -k -n web,llm,app \"vite\" \"tsx server/llm.ts\" \"wait-on tcp:5173 && node scripts/electron-dev.mjs\"",
+    "overlay:prod": "vite build && electron ."
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.6.0",
+    "@mediapipe/tasks-vision": "^1.2.2",
+    "vosk-browser": "^0.0.8",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "concurrently": "^9.2.0",
+    "electron": "^45.2.3",
+    "tsx": "^4.20.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0",
+    "wait-on": "^9.5.1"
+  },
+  "main": "electron/main.mjs",
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.3": true,
+    "electron@45": [
+      null,
+      null,
+      [
+        null,
+        null,
+        null,
+        true
+      ]
+    ]
+  }
+}
