@@ -17,7 +17,7 @@ case "${1:-}" in
       UV=.tools/bin/uv
     fi
     [ -d .venv-hosted ] || $UV venv --python 3.12 .venv-hosted
-    $UV pip install --python "$PY" -r requirements-hosted.txt
+    $UV pip install --python "$PY" -r requirements.txt
     echo "Done. Try: ./hosted.sh test" ;;
   test)  shift; exec "$PY" -m pytest -q tests_hosted "$@" ;;
   serve) shift; exec "$PY" -m voice_sidecar.hosted_main serve "$@" ;;

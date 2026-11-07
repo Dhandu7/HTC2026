@@ -1,140 +1,73 @@
-# Voice sidecar
+# Hosted voice service
 
-> **Direction (7 Nov 2026): hosted voice with ElevenLabs, per-user records in DynamoDB.** The OpenVoice and Chatterbox
-> engines described further down were dropped (their environments are uninstalled) and are kept in the code only until
-> someone confirms they can be removed. Do not run `./setup.sh`; it would reinstall the heavy model stack.
+Lets a person create a voice from their own recordings and have VocalEyes speak in it. **ElevenLabs** clones the
+voice and makes the speech (on its servers). This service keeps what ElevenLabs does not know, in **DynamoDB**: which
+user owns which voice, their consent, their settings, where the voice is in its lifecycle, and the account's
+voice-slot cap.
 
-## Hosted voice (ElevenLabs + DynamoDB)
+AWS side, decisions and the checklist for the person deploying it: [`../docs/AWS_VOICE_HANDOFF.md`](../docs/AWS_VOICE_HANDOFF.md).
+Why the local engines (OpenVoice, Chatterbox) were dropped, with the measurements: [`../docs/VOICE_ENGINE_FLOW.md`](../docs/VOICE_ENGINE_FLOW.md).
 
-ElevenLabs clones and speaks; this service keeps what ElevenLabs does not know: which user owns which voice, their
-consent, settings and lifecycle, and the account's voice-slot cap. AWS side and decisions: [`../docs/AWS_VOICE_HANDOFF.md`](../docs/AWS_VOICE_HANDOFF.md).
+## Run it
 
 ```bash
 ./hosted.sh setup        # .venv-hosted, Python 3.12, about 160 MB
-./hosted.sh test         # 118 tests; no AWS account and no ElevenLabs key needed
-# local development, in memory, no login (dev auth only works on loopback):
+./hosted.sh test         # 135 tests; no AWS account and no ElevenLabs key needed
+
+# local development: in memory, no real login (dev auth only works on a loopback address)
 VOICE_STORE=memory AUTH_MODE=dev ELEVENLABS_API_KEY=... ./hosted.sh serve
-./hosted.sh smoke --clip my-voice.wav --i-am-the-voice-owner     # live ElevenLabs check with YOUR key
-VOICE_TABLE_NAME=... ./hosted.sh check-table                      # lifecycle check against the real DynamoDB table
+
+./hosted.sh smoke --clip my-voice.wav --i-am-the-voice-owner   # live ElevenLabs check with YOUR key
+VOICE_TABLE_NAME=... ./hosted.sh check-table                    # lifecycle check against the real DynamoDB table
+./hosted.sh reconcile                                           # retry stuck deletes, free stale reservations (schedule this)
+./hosted.sh config                                              # effective configuration, never a secret value
 ```
 
-Never paste the ElevenLabs key into a chat or commit it. Set `ELEVENLABS_API_KEY` in your shell for local work; in AWS it comes from Secrets Manager.
-Configuration variables are listed in [`voice_sidecar/hosted_main.py`](voice_sidecar/hosted_main.py) and the handoff doc.
-
-Rules the service enforces: no voice without consent (including that recordings and text go to ElevenLabs); a user can only reach their own voice (identity comes from a verified token); a failed create frees its slot; a delete completes only after ElevenLabs confirms; recordings are not kept; request text is never logged.
-
----
-
-# Legacy: local engines (OpenVoice, Chatterbox)
-
-
-A small local service that builds a voice from your own recordings and speaks text in it, using
-[OpenVoice V2](https://github.com/myshell-ai/OpenVoice) (MIT). It runs on your computer and
-listens on `127.0.0.1` only. Design and measurements: [`../docs/VOICE_ENGINE_FLOW.md`](../docs/VOICE_ENGINE_FLOW.md).
-
-AI-assisted speech: anything rendered in a cloned voice is labelled as such (`X-Ai-Assisted: true`
-on the API, a note in the test page and the CLI).
-
-## One-time setup
-
-```bash
-cd POC/voice-sidecar
-./setup.sh
-```
-
-This creates `.venv` (Python 3.9; the OpenVoice stack does not run on newer Pythons), installs the
-pinned packages, and downloads the models. About 3.5 GB in total, most of it on the first run.
-Nothing is installed system-wide. If you do not have `uv`, the script installs a private copy in `.tools/`.
-
-## Engines
-
-| | OpenVoice V2 (default) | Chatterbox |
-|---|---|---|
-| Setup | `./setup.sh` | `./setup-chatterbox.sh` (separate Python 3.11 environment, about 4 GB with weights) |
-| Start | `./run.sh serve` | `VOICE_ENGINE=chatterbox VOICE_DEVICE=mps ./run.sh serve` |
-| What it clones | Timbre only; accent and rhythm come from a stock base voice | Accent, pacing and tone, from the reference clips (zero-shot, no training) |
-| Speed on a laptop | 1 to 2 s per sentence | 12 to 25 s per sentence on an Apple GPU (35 s on the CPU, so use `mps`); first start about 5 minutes. Needs an NVIDIA GPU for conversation speed (not yet measured) |
-| In the owner's listening test | Did not sound like them | Sounded closer ("best so far") |
-| Controls | Pace, base voice, variation | Expressiveness, pacing match |
-| License | MIT | MIT. **The upstream project is retired (Aug 2026): no updates or support** |
-
-A voice is built **per engine**: the same clips and consent record are reused, but after switching engines press **Build** once more. The page shows which controls the running engine supports.
-
-## Train and test your own voice
-
-**In the browser (record or upload):**
-
-```bash
-./run.sh serve
-```
-
-Open the URL it prints (it ends in `#token=...`) in Chrome or Safari, not in an embedded preview, so
-the microphone works. Then: tick the consent box, record 10 to 20 prompted sentences or upload WAV
-files, press **Build my voice**, type some text and press **Speak in my voice**. **Stock voice** plays the
-base voice before conversion, and **Compare** plays stock then yours, so you can hear what the cloning changes.
-
-**From clip files (no browser):**
-
-```bash
-./run.sh train --i-am-the-voice-owner ~/my-clips/*.wav     # prints a profile id
-./run.sh say <profileId> "I need help." -o help.wav
-./run.sh say <profileId> "I need help." -o stock.wav --raw  # stock voice, for A/B
-```
-
-Tips for a good voice:
-
-- 20 seconds to 3 minutes of calm, natural speech is plenty. Measured: a profile built from 19 s of clean speech already has a stable voice embedding, so more audio did not change it. Cleaner beats longer.
-- Only the voice owner should be speaking in the audio. Interviews and podcasts with other voices pollute the voice; the build flags clips that sound unlike the rest.
-- A quiet room, one microphone distance, no music or fan noise. Each clip is checked on upload and rejected with a reason if it is too short, too quiet, clipped or silent.
-- Read varied sentences, not one phrase repeated.
-- **Base voice** (`--base`) matters most. OpenVoice only changes the *timbre* of a stock voice; accent, rhythm and intonation come from the base voice. Try `EN-US`, `EN-BR`, `EN_INDIA`, `EN-AU`, `EN-Default` and keep the one closest to how you speak.
-- `--tau` (0.1 to 0.6) is randomness inside the converter, not a similarity dial: measured on a real profile it moved the model's similarity score by under 0.01. Lower is steadier; higher adds variation and can add artifacts.
-
-## Your data
-
-Profiles are stored in `~/.vocaleyes/voice-sidecar/` (override with `VOICE_SIDECAR_DATA`), outside the repository, so they cannot be committed by accident. Each profile holds a consent record, your clips and the built embedding. Nothing is uploaded anywhere.
-
-```bash
-./run.sh list
-./run.sh delete <profileId>      # permanent: clips, embedding and consent record
-```
-
-The browser page also has **Pause**, **Export (zip)** and **Delete everything permanently**.
-
-## Rules the sidecar enforces
-
-- A profile cannot be created without an explicit consent acknowledgement (`self`, or `authorized` with the voice owner's name). There is no way to add clips or speak without that record.
-- Pausing a voice blocks all speech from it until resumed.
-- Pace is limited to 0.8 to 1.2, text to 500 characters, uploads to 25 MB.
-- The API needs a token (`X-Sidecar-Token` or `Authorization: Bearer`); only `/health` and the static `/ui` page are open, and neither holds data.
-- Profile ids are validated as 32 hex characters on every access, so no path can leave the profiles directory.
+**Never paste the ElevenLabs key into a chat or commit it.** Locally it is an environment variable
+(`ELEVENLABS_API_KEY`); in AWS it comes from Secrets Manager (`ELEVENLABS_SECRET_ID`). Every configuration variable is
+documented at the top of [`voice_sidecar/hosted_main.py`](voice_sidecar/hosted_main.py) and in the handoff.
 
 ## API
 
-See the docstring at the top of [`voice_sidecar/app.py`](voice_sidecar/app.py). The Electron app will start this process, pass a random token in `VOICE_SIDECAR_TOKEN` and its `userData` path in `VOICE_SIDECAR_DATA`.
+All `/v1/me/...` routes act only on the signed-in user's own voice. The user id is the verified token's `sub`, never a
+request field.
 
-## Configuration (environment)
+```
+GET    /health                    GET /v1/consent-text   (the exact text a person must agree to, versioned)
+GET    /v1/me/voice               POST /v1/me/voice      (multipart: consent JSON + audio files in any common format)
+PATCH  /v1/me/voice               {settings?, paused?}
+POST   /v1/me/voice/speak         {text, settings?} -> audio, labelled AI-assisted
+DELETE /v1/me/voice               deletes at ElevenLabs, then here
+```
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `VOICE_SIDECAR_DATA` | `~/.vocaleyes/voice-sidecar` | where profiles are stored |
-| `VOICE_SIDECAR_TOKEN` | random each start | shared secret |
-| `VOICE_SIDECAR_PORT` / `_HOST` | `8790` / `127.0.0.1` | listen address |
-| `VOICE_DEVICE` | `cpu` | `cpu` is faster and steadier than `mps` for OpenVoice on Apple silicon; Chatterbox: see its timings; `cuda` for NVIDIA is untested |
-| `VOICE_CKPT` | `models/v2` | OpenVoice V2 weights |
-| `VOICE_WATERMARK` | off | OpenVoice's `wavmark` watermark; its latency is untested |
-| `VOICE_ENGINE` | `openvoice` | `openvoice`, `chatterbox` (needs `.venv-cb`), or `fake` (tones, for testing the plumbing without models) |
-| `VOICE_CORS` | Vite dev origins and `null` | browser origins allowed to call the API |
+## Rules the service enforces (each has a test)
 
-## Tests
+- **No voice without consent**, including that recordings and text are sent to ElevenLabs, and the person must have been shown the current consent text.
+- **A user can only reach their own voice.** The ElevenLabs voice id never leaves the server.
+- **A failed create frees its slot** and does not leave an orphan voice; the account's slot cap is enforced atomically in DynamoDB.
+- **A delete completes only after ElevenLabs confirms.** Until then the voice is silenced and marked `deleting`, and it is retried.
+- **Recordings are not kept:** clips are checked, uploaded and dropped; only length, loudness and warnings are stored.
+- **Request text, audio, tokens and the API key are never logged**, and error messages never echo them.
+- Tokens are verified (RS256 only, issuer, expiry, optional audience); `AUTH_MODE=dev` refuses to run off loopback.
 
-```bash
-.venv/bin/python -m pytest -q       # 47 tests, no models needed (fake engine)
+## Layout
+
+```
+voice_sidecar/records.py        record store: in-memory and DynamoDB, one behaviour
+voice_sidecar/elevenlabs.py     ElevenLabs client (clone, speak, delete)
+voice_sidecar/hosted.py         consent, clip checks, create / speak / settings / pause / delete / reconcile
+voice_sidecar/hosted_app.py     HTTP API         voice_sidecar/auth.py     JWT and dev auth
+voice_sidecar/hosted_main.py    configuration and entry points
+voice_sidecar/audio.py          decoding any audio format, quality checks, splitting long recordings at pauses
+voice_sidecar/records_check.py  lifecycle check used by `./hosted.sh check-table`
+infra/                          DynamoDB table (CloudFormation JSON) and an example least-privilege IAM policy
+scripts/elevenlabs_smoke.py     live check you run yourself
+tests_hosted/                   the tests, with a fake ElevenLabs and moto for DynamoDB
 ```
 
 ## Limits
 
-- English only for now. Other languages need other base speakers and weights (OpenVoice) or Chatterbox's multilingual models (not wired in).
-- One render at a time (the models are not thread-safe). Expect about a second per sentence on an M-series CPU.
-- Voice quality depends heavily on the recordings and has to be judged by listening.
-- A cloned voice is for its owner, or for someone the owner has authorised. Do not build a voice from anyone else's recordings.
+- Not yet run against real AWS or the live ElevenLabs API. See the handoff for what is verified and what is not.
+- Speech is returned as a whole file, not streamed.
+- The consent text is a draft without legal or privacy review.
+- Which ElevenLabs plan is used decides how many users can have a voice (Starter 10, Creator 30, Pro 160, Scale and Business 660).

@@ -1,5 +1,13 @@
 # Voice engine flow: OpenVoice V2, phrase-first, consent-first
 
+> **Status update (7 Nov 2026): the local engines described here were dropped.** The team moved to **ElevenLabs** (hosted) for
+> the live voice, with per-user records in DynamoDB; see `AWS_VOICE_HANDOFF.md` and `../voice-sidecar/README.md`.
+> This document is kept as the record of **why**: the OpenVoice and Chatterbox measurements, the owner's listening
+> verdicts, and the app-side tier design (recordings, cache, live render, system voice), where "live render" is now ElevenLabs.
+> The Python code, scripts and result files it mentions were removed and can be recovered from git history, for example
+> `git show c280bac:POC/voice-sidecar/spike_openvoice.py` (the last commit that contained them).
+
+
 Status: **planned, not built.** Branch: `voice/openvoice-engine`. Written 7 Nov 2026.
 Companion doc (other branch): `docs/LLM_PREDICTION_FLOW.md` (`llm/bedrock-haiku-prediction`). It defines the shared `UserProfile` contract that this branch fills in under `voice`.
 

@@ -1,6 +1,6 @@
 # Handoff for Rajvir: the AWS side of the hosted voice (ElevenLabs + DynamoDB)
 
-Written 7 Nov 2026. Branch `voice/openvoice-engine` (the name is historical; the OpenVoice and Chatterbox work was dropped). This replaces `VOICE_HOSTED_HANDOFF.md`, which described hosting a model on an EC2 GPU. We are not doing that any more.
+Written 7 Nov 2026. Branch `voice/openvoice-engine` (the name is historical; the OpenVoice and Chatterbox work was dropped). This replaces an earlier handoff that described hosting a model on an EC2 GPU. We are not doing that any more (that file was removed; it is in git history).
 
 ## 1. What this is, in one minute
 
@@ -34,7 +34,7 @@ Read on 7 Nov 2026 from their docs and help center; re-check before relying on t
 
 ## 3. What is built and tested (application side)
 
-All in `POC/voice-sidecar/`. `./hosted.sh setup` then `./hosted.sh test` runs **118 tests with no AWS account and no ElevenLabs key**.
+All in `POC/voice-sidecar/`. `./hosted.sh setup` then `./hosted.sh test` runs **135 tests with no AWS account and no ElevenLabs key**.
 
 | Piece | File | Notes |
 |---|---|---|
@@ -141,7 +141,7 @@ Single table, on-demand.
 ## 9. How to verify end to end once things exist
 
 ```bash
-cd POC/voice-sidecar && ./hosted.sh setup && ./hosted.sh test            # 118 tests, no cloud needed
+cd POC/voice-sidecar && ./hosted.sh setup && ./hosted.sh test            # 135 tests, no cloud needed
 VOICE_TABLE_NAME=... AWS_REGION=... ./hosted.sh check-table              # the real table
 ELEVENLABS_API_KEY=... ./hosted.sh smoke --clip my-voice.wav --i-am-the-voice-owner   # whoever holds the key
 ```

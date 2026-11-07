@@ -90,23 +90,32 @@ def load_audio(data: bytes) -> tuple[np.ndarray, int]:
     return mono.astype(np.float32), int(rate)
 
 
-def split_at_pauses(samples: np.ndarray, sr: int, target_s: float = 15.0, max_s: float = 25.0) -> list[np.ndarray]:
-    """Cut a long recording into pieces of roughly target_s (never over max_s), at the quietest point
-    in each window so words are not chopped. Short recordings come back as one piece."""
+def split_at_pauses(samples: np.ndarray, sr: int, target_s: float = 15.0, max_s: float = 25.0, min_s: float = 10.0) -> list[np.ndarray]:
+    """Cut a long recording into pieces of 10 to 25 s, preferring a real pause near `target_s`, so words are not
+    chopped. If a window holds no pause at all, it falls back to its quietest frame. Short recordings come back as
+    one piece. Every sample ends up in exactly one piece."""
     n = max(1, int(sr * FRAME_S))
     frames = len(samples) // n
     if frames * FRAME_S <= max_s:
         return [samples]
     rms = np.sqrt(np.mean(samples[: frames * n].reshape(frames, n) ** 2, axis=1))
     smooth = np.convolve(rms, np.ones(5) / 5, mode="same")  # a pause, not a single quiet frame
+    pause_level = 0.05 * float(np.percentile(smooth, 90))  # well below the speech level of this recording
     out, pos = [], 0
-    lo_f, hi_f = int(target_s / FRAME_S), int(max_s / FRAME_S)
+    lo_f, tgt_f, hi_f = int(min_s / FRAME_S), int(target_s / FRAME_S), int(max_s / FRAME_S)
     while pos < frames:
         if (frames - pos) <= hi_f:
             end = frames
         else:
             window = smooth[pos + lo_f : pos + hi_f]
-            end = pos + lo_f + int(np.argmin(window))
+            quiet = np.flatnonzero(window <= pause_level)
+            if len(quiet):
+                # the pause closest to the target length; among the frames of that pause, the middle one
+                nearest = quiet[np.argmin(np.abs(quiet - (tgt_f - lo_f)))]
+                run = quiet[np.abs(quiet - nearest) <= 25]  # frames of the same pause (within half a second)
+                end = pos + lo_f + int(run[len(run) // 2])
+            else:
+                end = pos + lo_f + int(np.argmin(window))
         out.append(samples[pos * n : end * n])
         pos = end
     tail = samples[frames * n :]

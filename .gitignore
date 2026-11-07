@@ -4,13 +4,9 @@ node_modules
 dist/
 POC/public/mediapipe/
 
-# voice sidecar: local environment, downloaded models, and any trained voices
-POC/voice-sidecar/.venv/
+# voice sidecar: local tooling and environment
 POC/voice-sidecar/.tools/
-POC/voice-sidecar/models/
-POC/voice-sidecar/data/
 __pycache__/
 *.pyc
 .pytest_cache/
-POC/voice-sidecar/.venv-cb/
 POC/voice-sidecar/.venv-hosted/
