@@ -13,11 +13,16 @@
 //
 // The user's profile (about, people, sample sentences) goes in a cached system block,
 // so suggestions sound like them and repeat requests reuse the cached prompt.
+//
+// Voice: with ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID set, POST /api/speak returns the
+// sentence in the user's cloned voice (see docs/ELEVENLABS_VOICE.md). Otherwise the app
+// uses the system voice.
 import { createServer } from "node:http";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { fileURLToPath } from "node:url";
+import { elevenModel, elevenSpeak, voiceConfigured } from "./elevenlabs";
 
 // Load POC/.env (ANTHROPIC_API_KEY etc.). Variables already set in the shell win.
 try {
@@ -30,7 +35,9 @@ if (!process.env.ANTHROPIC_API_KEY) console.warn("[gazetype-llm] ANTHROPIC_API_K
 const PORT = Number(process.env.LLM_PORT ?? 8787);
 const MODEL = process.env.GAZETYPE_MODEL ?? "claude-opus-5-5";
 const FAST_MODEL = process.env.GAZETYPE_FAST_MODEL ?? "claude-haiku-5-5";
-const client = new Anthropic();
+// Created on first use, so the server (and the voice) still starts without an Anthropic key.
+let anthropic: Anthropic | null = null;
+const client = () => (anthropic ??= new Anthropic());
 
 const Suggestions = z.object({ suggestions: z.array(z.string()) });
 
@@ -94,7 +101,7 @@ async function predict(r: z.infer<typeof Request>): Promise<{ suggestions: strin
   // Cache the whole system prefix (instructions + profile). Short prefixes simply don't cache.
   if (pb) system.push({ type: "text", text: pb, cache_control: { type: "ephemeral" } });
 
-  const response = await client.beta.messages.parse({
+  const response = await client().beta.messages.parse({
     model,
     max_tokens: fast ? 400 : 2000,
     // Haiku: no thinking for the lowest latency (allowed at effort "low").
@@ -116,10 +123,49 @@ async function predict(r: z.infer<typeof Request>): Promise<{ suggestions: strin
   return { suggestions: [...new Set(valid)].slice(0, r.n), model, cachedTokens };
 }
 
+const SpeakRequest = z.object({ text: z.string().min(1).max(1000) });
+
 createServer(async (req, res) => {
   res.setHeader("Content-Type", "application/json");
+  // The Electron overlay calls http://localhost:8787 directly (a different origin from the page).
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
   if (req.method === "GET" && req.url === "/api/health") {
-    res.end(JSON.stringify({ ok: true, keySet: !!process.env.ANTHROPIC_API_KEY, model: MODEL, fastModel: FAST_MODEL }));
+    res.end(
+      JSON.stringify({ ok: true, keySet: !!process.env.ANTHROPIC_API_KEY, model: MODEL, fastModel: FAST_MODEL, voice: voiceConfigured() }),
+    );
+    return;
+  }
+  if (req.method === "GET" && req.url === "/api/voice/health") {
+    res.end(JSON.stringify({ ok: voiceConfigured(), model: elevenModel() }));
+    return;
+  }
+  if (req.method === "POST" && req.url === "/api/speak") {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    const started = Date.now();
+    try {
+      if (!voiceConfigured()) {
+        res.statusCode = 503;
+        res.end(JSON.stringify({ error: "Set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID in POC/.env" }));
+        return;
+      }
+      const { text } = SpeakRequest.parse(JSON.parse(body || "{}"));
+      const audio = Buffer.from(await elevenSpeak(text));
+      console.log(`[gazetype-llm] speak ${text.length} chars ${Date.now() - started} ms`);
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.end(audio);
+    } catch (err) {
+      const bad = err instanceof z.ZodError || err instanceof SyntaxError;
+      if (!bad) console.error("[gazetype-llm] speak failed:", err);
+      res.statusCode = bad ? 400 : 502;
+      res.end(JSON.stringify({ error: bad ? "bad request" : String(err) }));
+    }
     return;
   }
   if (req.method !== "POST" || req.url !== "/api/predict") {
@@ -148,4 +194,7 @@ createServer(async (req, res) => {
       res.end(JSON.stringify({ error: String(err) }));
     }
   }
-}).listen(PORT, () => console.log(`[gazetype-llm] http://localhost:${PORT} model=${MODEL} fast=${FAST_MODEL}`));
+}).listen(PORT, () => {
+  console.log(`[gazetype-llm] http://localhost:${PORT} model=${MODEL} fast=${FAST_MODEL}`);
+  console.log(`[gazetype-llm] voice: ${voiceConfigured() ? `ElevenLabs (${elevenModel()})` : "system voice (set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID for the cloned voice)"}`);
+});

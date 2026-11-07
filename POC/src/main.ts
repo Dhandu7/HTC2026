@@ -12,6 +12,7 @@ import { ProfileManager, pickSamples, type Profile } from "./profile/profiles";
 import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost } from "./ui/keyboards";
 import { TypingSession, normalizeText, type RunResult } from "./metrics/session";
 import { startVoiceCommands } from "./input/voice";
+import { cloudVoiceAvailable, speakText } from "./voice/elevenlabsVoice";
 
 // ---------- Electron bridge (absent in the browser) ----------
 interface Bridge {
@@ -278,10 +279,10 @@ function hotCorner(g: GazePoint) {
 }
 
 // ---------- actions ----------
+/** Speak in the user's cloned voice (ElevenLabs via the local server), else the system voice. */
 function speak(text: string) {
   if (!text.trim()) return;
-  speechSynthesis.cancel();
-  speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  speakText(text);
 }
 
 async function doAction(a: string) {
@@ -664,15 +665,18 @@ async function boot() {
   applyProfile(profiles.active);
   gazeKb.update();
   render();
+  void cloudVoiceAvailable(); // check once now so the first Speak doesn't wait on it
   llmOn = await llmAvailable();
   const st = llmStatus();
   const llmEl = $("#llm-status");
   llmEl.className = `llm-status ${st.on ? "on" : "off"}`;
-  llmEl.textContent = st.on
-    ? `✨ AI suggestions on${st.fastModel ? ` (${st.fastModel})` : ""}`
-    : st.reason === "no-key"
-      ? "AI suggestions off: the LLM server has no API key. Add ANTHROPIC_API_KEY to POC/.env and restart it."
-      : "AI suggestions off: LLM server not running (npm run dev:all). On-device prediction still works.";
+  llmEl.textContent =
+    (st.on
+      ? `✨ AI suggestions on${st.fastModel ? ` (${st.fastModel})` : ""}`
+      : st.reason === "no-key"
+        ? "AI suggestions off: the LLM server has no API key. Add ANTHROPIC_API_KEY to POC/.env and restart it."
+        : "AI suggestions off: LLM server not running (npm run dev:all). On-device prediction still works.") +
+    (st.voice ? " · 🗣 Speaking in your voice (ElevenLabs)" : "");
   try {
     const le = localStorage.getItem("gazetype.lastError.v1");
     if (le) lastError = JSON.parse(le);

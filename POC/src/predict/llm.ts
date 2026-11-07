@@ -22,6 +22,8 @@ export interface LlmStatus {
   /** "no-server": proxy not running. "no-key": running without ANTHROPIC_API_KEY. */
   reason?: "no-server" | "no-key";
   fastModel?: string;
+  /** The server can speak in the user's cloned voice (ElevenLabs). */
+  voice?: boolean;
 }
 let status: LlmStatus = { on: false, reason: "no-server" };
 export const llmStatus = () => status;
@@ -43,7 +45,9 @@ export async function llmAvailable(): Promise<boolean> {
     const h = r.ok ? await r.json() : {};
     // Older servers don't report keySet; treat missing as set.
     available = !!h.ok && h.keySet !== false;
-    status = available ? { on: true, fastModel: h.fastModel } : { on: false, reason: h.ok ? "no-key" : "no-server" };
+    status = available
+      ? { on: true, fastModel: h.fastModel, voice: !!h.voice }
+      : { on: false, reason: h.ok ? "no-key" : "no-server", voice: !!h.voice };
   } catch {
     available = false;
     status = { on: false, reason: "no-server" };
