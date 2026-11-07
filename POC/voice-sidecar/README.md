@@ -12,13 +12,15 @@ Why the local engines (OpenVoice, Chatterbox) were dropped, with the measurement
 
 ```bash
 ./hosted.sh setup        # .venv-hosted, Python 3.12, about 160 MB
-./hosted.sh test         # 147 tests; no AWS account and no ElevenLabs key needed
+./hosted.sh test         # 166 tests; no AWS account and no ElevenLabs key needed
 
 # try the app screens with NO key and no AWS: the service plus a fake ElevenLabs that makes tones, not speech
 ./hosted.sh dev          # then, in another terminal:  cd POC && npm run dev   and open the app's "🗣 My voice" button
 
-# your ElevenLabs key: stored in the macOS Keychain, never in a file, shell history or the process list
-./hosted.sh key-set      # prompts for the key (nothing is shown); ./hosted.sh key-check / key-delete
+# your ElevenLabs key: put it in ONE of these places (the scripts look in this order)
+#   1. the .env file in this folder: open it, paste after ELEVENLABS_API_KEY=, save (git ignores it)
+#   2. the macOS Keychain:   ./hosted.sh key-set      (prompts; nothing is shown)
+./hosted.sh key-check    # says where a key was found, never shows it
 # local development against the real ElevenLabs, in memory, with a test login:
 VOICE_STORE=memory AUTH_MODE=dev ./hosted.sh serve     # picks the key up from the Keychain
 
@@ -29,7 +31,7 @@ VOICE_TABLE_NAME=... ./hosted.sh check-table                    # lifecycle chec
 ./hosted.sh config                                              # effective configuration, never a secret value
 ```
 
-**Never paste the ElevenLabs key into a chat, type it after `export` in a terminal (that lands in your shell history), or commit it.** Use `./hosted.sh key-set`. In AWS it comes from Secrets Manager (`ELEVENLABS_SECRET_ID`). If a key ever does leak, rotate it in the ElevenLabs dashboard. Every configuration variable is
+**Never paste the ElevenLabs key into a chat, type it after `export` in a terminal (that lands in your shell history), or commit it.** Put it in `.env` (copy of `.env.example`; git ignores `.env`, and it is created with owner-only permissions) or use `./hosted.sh key-set`. The `.env` file is read as text and never run as a script, and only `ELEVENLABS_API_KEY` is read from it. In AWS it comes from Secrets Manager (`ELEVENLABS_SECRET_ID`). If a key ever does leak, rotate it in the ElevenLabs dashboard. Every configuration variable is
 documented at the top of [`voice_sidecar/hosted_main.py`](voice_sidecar/hosted_main.py) and in the handoff.
 
 ## API

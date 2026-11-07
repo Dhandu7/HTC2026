@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Helper for the hosted (ElevenLabs + DynamoDB) voice service.
 #   ./hosted.sh setup     create .venv-hosted (Python 3.12) and install the light requirements
+#   .env                  paste ELEVENLABS_API_KEY=... into the .env file here (git ignores it), or:
 #   ./hosted.sh key-set   store your ElevenLabs key in the macOS Keychain (prompts; never shown)
 #   ./hosted.sh key-check / key-delete
 #   ./hosted.sh doctor    is the key accepted, does the plan allow cloning, how many voice slots are free? (read-only)
@@ -13,17 +14,27 @@
 #   ./hosted.sh smoke ... live ElevenLabs check with YOUR key: see scripts/elevenlabs_smoke.py
 set -euo pipefail
 cd "$(dirname "$0")"
-PY=.venv-hosted/bin/python
+PY="${VOICE_PY:-.venv-hosted/bin/python}"   # VOICE_PY exists so the tests can stand in for Python
 
-# --- the ElevenLabs key, kept in the macOS Keychain (never in a file, never in shell history, never in argv) ---
+# --- the ElevenLabs key: from your environment, else the .env file in this folder, else the macOS Keychain ---
+# It is never printed, never put on a command line, and the .env file is ignored by git.
+ENV_FILE="${VOICE_ENV_FILE:-.env}"
 KEY_SERVICE="vocaleyes-elevenlabs-api-key"
 have_keychain() { command -v security >/dev/null 2>&1; }
-# Commands that talk to ElevenLabs read the key from the Keychain unless you already set ELEVENLABS_API_KEY
-# or are using Secrets Manager (ELEVENLABS_SECRET_ID).
+# The value of one variable from the .env file. The file is READ, never run as a script.
+env_value() {
+  [ -f "$ENV_FILE" ] || return 0
+  sed -n -E "s/^[[:space:]]*(export[[:space:]]+)?$1[[:space:]]*=[[:space:]]*//p" "$ENV_FILE" | head -n 1 \
+    | sed -E "s/[[:space:]]+#.*$//; s/[[:space:]]+$//; s/^\"(.*)\"$/\1/; s/^'(.*)'$/\1/"
+}
+# Commands that talk to ElevenLabs call this: it sets ELEVENLABS_API_KEY unless it is already set or you use Secrets Manager.
 load_key() {
-  if [ -z "${ELEVENLABS_API_KEY:-}" ] && [ -z "${ELEVENLABS_SECRET_ID:-}" ] && have_keychain; then
+  if [ -z "${ELEVENLABS_API_KEY:-}" ] && [ -z "${ELEVENLABS_SECRET_ID:-}" ]; then
     local k
-    k="$(security find-generic-password -a "${USER:-user}" -s "$KEY_SERVICE" -w 2>/dev/null || true)"
+    k="$(env_value ELEVENLABS_API_KEY)"
+    if [ -z "$k" ] && have_keychain; then
+      k="$(security find-generic-password -a "${USER:-user}" -s "$KEY_SERVICE" -w 2>/dev/null || true)"
+    fi
     if [ -n "$k" ]; then export ELEVENLABS_API_KEY="$k"; fi
   fi
 }
@@ -43,8 +54,10 @@ case "${1:-}" in
     security add-generic-password -a "${USER:-user}" -s "$KEY_SERVICE" -U -w
     echo "Stored in your login Keychain as '$KEY_SERVICE'. Check with: ./hosted.sh key-check" ;;
   key-check)
-    have_keychain || { echo "no Keychain here"; exit 2; }
-    if security find-generic-password -a "${USER:-user}" -s "$KEY_SERVICE" >/dev/null 2>&1; then echo "key: stored in the Keychain (not shown)"; else echo "key: not stored. Run ./hosted.sh key-set"; exit 1; fi ;;
+    where=""
+    [ -n "$(env_value ELEVENLABS_API_KEY)" ] && where="$where ${ENV_FILE}"
+    if have_keychain && security find-generic-password -a "${USER:-user}" -s "$KEY_SERVICE" >/dev/null 2>&1; then where="$where Keychain"; fi
+    if [ -n "$where" ]; then echo "key: found in:$where (not shown)"; else echo "key: not found. Paste it into $(pwd)/${ENV_FILE} (ELEVENLABS_API_KEY=...) or run ./hosted.sh key-set"; exit 1; fi ;;
   key-delete)
     have_keychain || { echo "no Keychain here"; exit 2; }
     security delete-generic-password -a "${USER:-user}" -s "$KEY_SERVICE" >/dev/null && echo "key removed from the Keychain" || echo "no stored key to remove" ;;
