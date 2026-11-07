@@ -30,8 +30,9 @@ def cmd_serve(a, settings: Settings) -> int:
     from .app import create_app
 
     url = f"http://{settings.host}:{settings.port}/ui#token={settings.token}"
-    print(f"[voice-sidecar] engine={settings.engine} device={settings.device} data={settings.data_dir}")
-    print(f"[voice-sidecar] open this in your browser to record and test a voice:\n\n    {url}\n")
+    # flush: when stdout is a pipe or file (Electron, a log), Python buffers and the URL would never appear
+    print(f"[voice-sidecar] engine={settings.engine} device={settings.device} data={settings.data_dir}", flush=True)
+    print(f"[voice-sidecar] open this in your browser to record and test a voice:\n\n    {url}\n", flush=True)
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_level="warning")
     return 0
 
