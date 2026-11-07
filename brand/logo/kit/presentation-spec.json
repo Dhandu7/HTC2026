@@ -1,0 +1,37 @@
+{
+  "brand": "VocalEyes",
+  "tagline": "Speak with your eyes",
+  "brief": "A webcam eye-gaze communication tool for people who have lost speech. It must feel warm, dignified and calm, never clinical, and read clearly at app-icon and favicon size.",
+  "adjectives": ["warm", "dignified", "calm", "human", "accessible"],
+  "criteria": "Success: unlike the usual blue medical or eye-icon marks, recognisable at 24 px, works in one colour and reversed, says 'seeing becomes saying' in one glance.",
+  "industry": "consumer-app",
+  "mockups": ["app-icon", "website", "favicon-tab", "social", "business-card", "sticker"],
+  "nav": ["Talk", "Family", "Resources"],
+  "brand_color": "#0B4F5C",
+  "tile_color": "#0B4F5C",
+  "greyscale": false,
+  "final": true,
+  "designer": "HTC2026 team",
+  "concepts": [
+    {
+      "name": "Eye Bubble",
+      "symbol": "vocaleyes-symbol.svg",
+      "lockup": "vocaleyes-horizontal.svg",
+      "stacked": "vocaleyes-stacked.svg",
+      "avatar": "vocaleyes-app-icon.svg",
+      "symbol_on_tile": "vocaleyes-symbol-reversed.svg",
+      "symbol_on_dark": "vocaleyes-symbol-reversed.svg",
+      "lockup_on_dark": "vocaleyes-horizontal-reversed.svg",
+      "stacked_on_dark": "vocaleyes-stacked-reversed.svg",
+      "idea": "An eye that is also a speech bubble: seeing becomes saying.",
+      "rationale": [
+        "One idea in one glance: the product is gaze turned into voice.",
+        "The warm coral pupil is the point of gaze, the one thing the user chooses.",
+        "Avoids the usual blue-and-clinical look of assistive tech: teal and coral feel human.",
+        "Reversed tile version stays readable at 16 px where the full-colour ring would blur."
+      ]
+    }
+  ],
+  "recommendation": "Use the full-colour symbol on light backgrounds, the reversed symbol on teal or dark, and the tile version for favicons and app icons.",
+  "next_steps": ["Trademark and font-licence check", "Add to the VocalEyes app header and demo video", "Review colour proofs in print"]
+}
