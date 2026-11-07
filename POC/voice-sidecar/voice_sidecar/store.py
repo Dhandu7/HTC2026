@@ -2,9 +2,9 @@
 
 Layout, under <data_dir>/profiles/<profileId>/:
   consent.json    who agreed, when (written first; nothing else is stored without it)
-  meta.json       clips (name, label, quality report), embeddingVersion, built, paused
+  meta.json       clips (name, label, quality report), builds {engine: version}, paused
   clips/clip-NNN.wav
-  embedding.pth   the voice embedding (written by the engine)
+  embedding.pth   the OpenVoice voice embedding; other engines write embedding-<engine>.pt (written by the engine)
 
 Delete removes the whole directory. Profile ids are random hex, validated on every access so a
 caller can never walk outside the profiles directory.
@@ -26,6 +26,8 @@ from typing import Optional
 
 PROFILE_ID = re.compile(r"^[0-9a-f]{32}$")
 CLIP_NAME = re.compile(r"^clip-\d{3}\.wav$")
+ENGINE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
+LEGACY_ENGINE = "openvoice-v2"  # profiles made before engines were tracked were all OpenVoice
 LABEL_MAX = 80
 
 
@@ -79,8 +81,11 @@ class ProfileStore:
             raise NotFound("no such profile")
         return d
 
-    def embedding_path(self, pid: str) -> Path:
-        return self.dir(pid) / "embedding.pth"
+    def embedding_path(self, pid: str, engine: str = LEGACY_ENGINE) -> Path:
+        """One voice file per engine: they are not interchangeable. OpenVoice keeps its original filename."""
+        if not ENGINE_NAME.match(engine):
+            raise NotFound("no such engine")
+        return self.dir(pid) / ("embedding.pth" if engine == LEGACY_ENGINE else f"embedding-{engine}.pt")
 
     def clip_paths(self, pid: str) -> list[Path]:
         return [self.dir(pid) / "clips" / c["name"] for c in self.meta(pid)["clips"]]
@@ -100,7 +105,7 @@ class ProfileStore:
         }
         # Consent first, so a half-created profile can never exist without it.
         _atomic_write(d / "consent.json", json.dumps(record, indent=2))
-        _atomic_write(d / "meta.json", json.dumps({"clips": [], "embeddingVersion": 0, "built": False, "paused": False, "nextClip": 1}, indent=2))
+        _atomic_write(d / "meta.json", json.dumps({"clips": [], "builds": {}, "versions": {}, "paused": False, "nextClip": 1}, indent=2))
         return pid
 
     def consent(self, pid: str) -> dict:
@@ -113,7 +118,15 @@ class ProfileStore:
         return c
 
     def meta(self, pid: str) -> dict:
-        return json.loads((self.dir(pid) / "meta.json").read_text(encoding="utf-8"))
+        m = json.loads((self.dir(pid) / "meta.json").read_text(encoding="utf-8"))
+        if "builds" not in m:  # profile written before engines were tracked: it was built (or not) with OpenVoice
+            legacy = int(m.get("embeddingVersion", 0))
+            m["builds"] = {LEGACY_ENGINE: legacy} if m.get("built") else {}
+            m["versions"] = {LEGACY_ENGINE: legacy} if legacy else {}
+        m.setdefault("versions", {})
+        m.pop("built", None)
+        m.pop("embeddingVersion", None)
+        return m
 
     def _save_meta(self, pid: str, meta: dict) -> None:
         _atomic_write(self.dir(pid) / "meta.json", json.dumps(meta, indent=2))
@@ -121,7 +134,8 @@ class ProfileStore:
     def list_ids(self) -> list[str]:
         return sorted(p.name for p in self.root.iterdir() if p.is_dir() and PROFILE_ID.match(p.name))
 
-    def status(self, pid: str) -> dict:
+    def status(self, pid: str, engine: str = LEGACY_ENGINE) -> dict:
+        """Profile state as seen by `engine`: a voice built with another engine does not count as built."""
         consent = self.consent(pid)  # raises if consent is missing
         m = self.meta(pid)
         return {
@@ -129,8 +143,9 @@ class ProfileStore:
             "consent": consent,
             "clips": m["clips"],
             "referenceSeconds": round(sum(c["report"]["seconds"] for c in m["clips"]), 1),
-            "built": m["built"],
-            "embeddingVersion": m["embeddingVersion"],
+            "built": engine in m["builds"],
+            "embeddingVersion": m["builds"].get(engine, 0),
+            "builtWith": sorted(m["builds"]),
             "paused": m["paused"],
         }
 
@@ -144,7 +159,7 @@ class ProfileStore:
         clip = {"name": name, "label": re.sub(r"[^\w .,'!?()-]", "", label or "")[:LABEL_MAX] or name, "report": report, "addedAt": int(time.time() * 1000)}
         m["clips"].append(clip)
         m["nextClip"] += 1
-        m["built"] = False  # the embedding no longer matches the clips
+        m["builds"] = {}  # every voice built from the old clip set is now stale
         self._save_meta(pid, m)
         return clip
 
@@ -160,18 +175,20 @@ class ProfileStore:
         p = self.clip_file(pid, name)
         m = self.meta(pid)
         m["clips"] = [c for c in m["clips"] if c["name"] != name]
-        m["built"] = False
+        m["builds"] = {}
         p.unlink()
         self._save_meta(pid, m)
 
     # ---- embedding / state ----
 
-    def mark_built(self, pid: str) -> int:
+    def mark_built(self, pid: str, engine: str = LEGACY_ENGINE) -> int:
+        """Record a fresh build. The version only ever goes up, even when clips change in between, so
+        anything cached against an old voice (rendered audio) can never match a rebuilt one."""
         m = self.meta(pid)
-        m["built"] = True
-        m["embeddingVersion"] += 1
+        m["versions"][engine] = m["versions"].get(engine, 0) + 1
+        m["builds"][engine] = m["versions"][engine]
         self._save_meta(pid, m)
-        return m["embeddingVersion"]
+        return m["versions"][engine]
 
     def set_paused(self, pid: str, paused: bool) -> None:
         m = self.meta(pid)

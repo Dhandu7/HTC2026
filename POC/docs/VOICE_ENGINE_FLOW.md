@@ -91,7 +91,9 @@ What this says:
 - **Not usable for live speech on a Mac.** 12 to 38 s per sentence, with the machine also busy with iCloud sync. Real-time needs an NVIDIA GPU, which this test did not have, so Chatterbox's real speed is unmeasured. This points directly at the hosted GPU plan.
 - **A modest gain on longer sentences, and a loss on short phrases**, by a yardstick biased toward Chatterbox. The numbers alone do not show a decisive win. **Listening is the real test**, and the owner's verdict on the clips decides whether this is worth pursuing.
 - **The project is retired.** Its README says that as of August 2026 it is unmaintained, with no updates or support. MIT code stays usable, but there will be no fixes.
+- **CPU is slower than the Apple GPU:** 35 s median per sentence on the CPU (13.5 s of compute per second of audio, 5 GB of memory), against 25 s on MPS in the spike and 12 to 17 s through the sidecar. Use `mps` on a Mac. The CPU prepares a voice much faster (2 s against 31 s) and loads in 15 s once the weights are cached.
 - It always embeds an inaudible watermark (Perth) in its output, which helps with labelling AI speech.
+- **Update:** the owner listened to both and chose Chatterbox ("cb-mps-1.wav is the best so far"). It is now a selectable engine in the sidecar; see the README and `VOICE_HOSTED_HANDOFF.md`.
 - **Turbo (350M, one-step decoder) and Nano (110M, built for CPU) were not tested.** If Chatterbox sounds right, Turbo is the one to try for latency, on an NVIDIA GPU.
 
 Install gotchas found (all handled in the spike script or notes):

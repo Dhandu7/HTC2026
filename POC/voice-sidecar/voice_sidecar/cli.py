@@ -120,7 +120,7 @@ def cmd_delete(a, settings: Settings) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="voice_sidecar", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", help="profile storage directory (default ~/.vocaleyes/voice-sidecar)")
-    ap.add_argument("--engine", choices=["openvoice", "fake"], help="fake = tones, for testing the plumbing")
+    ap.add_argument("--engine", choices=["openvoice", "chatterbox", "fake"], help="chatterbox needs its own environment (setup-chatterbox.sh, run with VOICE_ENGINE=chatterbox ./run.sh); fake = tones, for testing")
     ap.add_argument("--device", choices=["cpu", "mps", "cuda"], help="cpu is faster and steadier on Apple silicon; cuda (NVIDIA) is untested")
     sub = ap.add_subparsers(dest="cmd", required=True)
 

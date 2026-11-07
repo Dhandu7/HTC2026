@@ -12,3 +12,4 @@ POC/voice-sidecar/data/
 __pycache__/
 *.pyc
 .pytest_cache/
+POC/voice-sidecar/.venv-cb/

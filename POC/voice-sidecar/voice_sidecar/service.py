@@ -11,6 +11,8 @@ from .store import Consent, ConsentError, ProfileStore, StoreError
 
 PACE_RANGE = (0.8, 1.2)
 TAU_RANGE = (0.1, 0.6)
+EXAGGERATION_RANGE = (0.25, 1.5)  # Chatterbox: expressiveness; 0.5 is the default
+CFG_RANGE = (0.0, 1.0)  # Chatterbox: how closely it follows the reference's pacing
 #: A clip whose voice is this dissimilar from the average of all clips is flagged as possibly another speaker.
 SIMILARITY_FLAG = 0.8
 
@@ -56,12 +58,12 @@ class VoiceService:
         return self.store.create(consent)
 
     def status(self, pid: str) -> dict:
-        return self.store.status(pid)
+        return self.store.status(pid, self.engine.name)
 
     def set_paused(self, pid: str, paused: bool) -> dict:
         self.store.consent(pid)
         self.store.set_paused(pid, paused)
-        return self.store.status(pid)
+        return self.store.status(pid, self.engine.name)
 
     def delete_profile(self, pid: str) -> None:
         self.store.delete(pid)
@@ -114,10 +116,10 @@ class VoiceService:
             seconds += c["report"]["seconds"]
         paths = [self.store.clip_file(pid, c["name"]) for c in chosen]
         try:
-            info = self.engine.build_embedding(paths, self.store.embedding_path(pid))
+            info = self.engine.build_embedding(paths, self.store.embedding_path(pid, self.engine.name))
         except EngineError as e:
             raise Conflict(str(e))
-        version = self.store.mark_built(pid)
+        version = self.store.mark_built(pid, self.engine.name)
         out = {"embeddingVersion": version, "clipsUsed": len(chosen), "referenceSeconds": round(seconds, 1), **info}
         # Flag clips that do not sound like the rest (another speaker in an interview, a different room).
         # Reported, never removed automatically: the thresholds are not validated on real data yet.
@@ -129,9 +131,9 @@ class VoiceService:
 
     # ---- speaking ----
 
-    def synthesize(self, pid: str, text: str, pace: float = 1.0, tau: float = 0.3, raw: bool = False, base: str = "EN-US") -> "tuple[bytes, dict]":
+    def synthesize(self, pid: str, text: str, pace: float = 1.0, tau: float = 0.3, raw: bool = False, base: str = "EN-US", exaggeration: float = 0.5, cfg_weight: float = 0.5) -> "tuple[bytes, dict]":
         self.store.consent(pid)  # no consent record, no audio: ConsentError
-        status = self.store.status(pid)
+        status = self.store.status(pid, self.engine.name)
         if status["paused"]:
             raise Locked("this voice is paused")
         text = (text or "").strip()
@@ -140,10 +142,11 @@ class VoiceService:
         if len(text) > self.settings.max_text_chars:
             raise BadRequest(f"text is over {self.settings.max_text_chars} characters")
         if not raw and not status["built"]:
-            raise Conflict("this voice has not been built yet: add clips and build it first")
+            raise Conflict(f"this voice has not been built with {self.engine.name} yet: add clips and press Build" + (f" (it was built with: {', '.join(status['builtWith'])})" if status["builtWith"] else ""))
         try:
             wav, timing = self.engine.synthesize(
-                text, self.store.embedding_path(pid), _clamp(pace, PACE_RANGE), _clamp(tau, TAU_RANGE), raw, base
+                text, self.store.embedding_path(pid, self.engine.name), _clamp(pace, PACE_RANGE), _clamp(tau, TAU_RANGE), raw, base,
+                exaggeration=_clamp(exaggeration, EXAGGERATION_RANGE), cfg_weight=_clamp(cfg_weight, CFG_RANGE),
             )
         except EngineError as e:
             raise Conflict(str(e))

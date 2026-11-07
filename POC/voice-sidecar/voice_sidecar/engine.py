@@ -30,6 +30,9 @@ class Engine(Protocol):
     device: str
     warm: bool
     bases: "list[str]"
+    #: What the engine can do, so the page shows only controls that work: pace, base (stock voices), tau,
+    #: exaggeration (expressiveness) and cfg (pacing fidelity).
+    capabilities: "dict[str, bool]"
 
     def load(self) -> None: ...
 
@@ -38,7 +41,7 @@ class Engine(Protocol):
     def build_embedding(self, wav_paths: Sequence[Path], out_path: Path) -> dict:
         """Write the voice embedding for these clips to out_path. Returns {"seconds": <build time>}."""
 
-    def synthesize(self, text: str, embedding_path: Path, pace: float = 1.0, tau: float = 0.3, raw: bool = False, base: str = DEFAULT_BASE) -> "tuple[bytes, dict]":
+    def synthesize(self, text: str, embedding_path: Path, pace: float = 1.0, tau: float = 0.3, raw: bool = False, base: str = DEFAULT_BASE, **opts) -> "tuple[bytes, dict]":
         """Return (WAV bytes, timings). raw=True returns the stock base voice, before conversion, for A/B."""
 
     def clip_similarity(self, wav_paths: Sequence[Path]) -> "list[float]":
@@ -47,6 +50,7 @@ class Engine(Protocol):
 
 class OpenVoiceEngine:
     name = "openvoice-v2"
+    capabilities = {"pace": True, "base": True, "tau": True, "exaggeration": False, "cfg": False}
 
     def __init__(self, ckpt_dir: Path, device: str = "cpu", watermark: bool = False, speaker: str = "EN-US", tmp_dir: Optional[Path] = None):
         self.ckpt_dir = Path(ckpt_dir)
@@ -142,7 +146,7 @@ class OpenVoiceEngine:
         mean = torch.stack(ses).mean(dim=0)
         return [round(float(torch.nn.functional.cosine_similarity(se, mean, dim=0)), 3) for se in ses]
 
-    def synthesize(self, text: str, embedding_path: Path, pace: float = 1.0, tau: float = 0.3, raw: bool = False, base: str = DEFAULT_BASE):
+    def synthesize(self, text: str, embedding_path: Path, pace: float = 1.0, tau: float = 0.3, raw: bool = False, base: str = DEFAULT_BASE, **opts):
         self.load()
         if base not in self.speaker_ids:
             raise EngineError(f"unknown base voice {base!r}; available: {', '.join(self.bases)}")
@@ -165,6 +169,10 @@ def make_engine(settings) -> Engine:
         from .fake_engine import FakeEngine
 
         return FakeEngine()
+    if settings.engine == "chatterbox":
+        from .chatterbox_engine import ChatterboxEngine
+
+        return ChatterboxEngine(settings.device, tmp_dir=settings.data_dir / "tmp")
     if settings.engine != "openvoice":
-        raise EngineError(f"unknown engine {settings.engine!r}")
+        raise EngineError(f"unknown engine {settings.engine!r} (openvoice, chatterbox or fake)")
     return OpenVoiceEngine(settings.ckpt_dir, settings.device, settings.watermark, tmp_dir=settings.data_dir / "tmp")

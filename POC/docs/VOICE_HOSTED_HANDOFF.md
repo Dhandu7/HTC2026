@@ -18,6 +18,18 @@ Device (any laptop)                          AWS
 
 Only the **live render tier (T2)** moves to the server. Real recordings, the pre-rendered cache and the system voice stay on the device, so the app still speaks offline or if the server is down.
 
+## 1b. Update: host Chatterbox, not OpenVoice
+
+After this doc was first written, the owner listened to both engines on their own clips and preferred **Chatterbox** (see the "Chatterbox test" in `VOICE_ENGINE_FLOW.md`). It is now a selectable engine in the sidecar (`VOICE_ENGINE=chatterbox`, its own environment from `./setup-chatterbox.sh`, Python 3.11). Everything above about EC2, privacy, auth and the API still applies; what changes for the GPU host:
+
+- **It needs the GPU.** On an Apple GPU a sentence takes 12 to 25 s and the first start about 5 minutes. Nobody has run it on NVIDIA, so its real speed is unknown. **Measuring a warm sentence on a T4 and an A10G is the first job**, and it decides whether near-realtime is reachable.
+- **Weights are about 3.2 GB** (the speech model 2.1 GB, the decoder 1.06 GB). A 16 GB GPU (T4) is probably enough; that is a guess, not a measurement. Bake the weights into the AMI.
+- **Setup on the instance:** `./setup-chatterbox.sh`, then `VOICE_ENGINE=chatterbox VOICE_DEVICE=cuda ./run.sh serve`. Pins: torch 2.6, transformers 5.2. Check `torch.cuda.is_available()` first.
+- **Try Turbo.** Chatterbox-Turbo (350M, a one-step decoder, built for low-latency agents) is the likeliest way to reach conversation speed. It is **not wired into the sidecar yet** (`ChatterboxTurboTTS` in the upstream package) and nobody has judged how it sounds on the owner's voice.
+- **The upstream project is retired** (no updates or support since August 2026). Pin the commit (done in `requirements-chatterbox.txt`) and treat any bug as ours to fix.
+- **Watermark:** Chatterbox always embeds an inaudible Perth watermark in its output, which fits the "AI-assisted" labelling.
+- **Voices are per engine.** A profile built for OpenVoice must be built again for Chatterbox. Building is one step (about 35 s on a Mac) and needs no training.
+
 ## 2. What exists and what does not
 
 | Exists, tested locally (M5 Mac, CPU) | Does not exist yet |

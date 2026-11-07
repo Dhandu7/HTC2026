@@ -18,6 +18,20 @@ This creates `.venv` (Python 3.9; the OpenVoice stack does not run on newer Pyth
 pinned packages, and downloads the models. About 3.5 GB in total, most of it on the first run.
 Nothing is installed system-wide. If you do not have `uv`, the script installs a private copy in `.tools/`.
 
+## Engines
+
+| | OpenVoice V2 (default) | Chatterbox |
+|---|---|---|
+| Setup | `./setup.sh` | `./setup-chatterbox.sh` (separate Python 3.11 environment, about 4 GB with weights) |
+| Start | `./run.sh serve` | `VOICE_ENGINE=chatterbox VOICE_DEVICE=mps ./run.sh serve` |
+| What it clones | Timbre only; accent and rhythm come from a stock base voice | Accent, pacing and tone, from the reference clips (zero-shot, no training) |
+| Speed on a laptop | 1 to 2 s per sentence | 12 to 25 s per sentence on an Apple GPU (35 s on the CPU, so use `mps`); first start about 5 minutes. Needs an NVIDIA GPU for conversation speed (not yet measured) |
+| In the owner's listening test | Did not sound like them | Sounded closer ("best so far") |
+| Controls | Pace, base voice, variation | Expressiveness, pacing match |
+| License | MIT | MIT. **The upstream project is retired (Aug 2026): no updates or support** |
+
+A voice is built **per engine**: the same clips and consent record are reused, but after switching engines press **Build** once more. The page shows which controls the running engine supports.
+
 ## Train and test your own voice
 
 **In the browser (record or upload):**
@@ -78,21 +92,21 @@ See the docstring at the top of [`voice_sidecar/app.py`](voice_sidecar/app.py). 
 | `VOICE_SIDECAR_DATA` | `~/.vocaleyes/voice-sidecar` | where profiles are stored |
 | `VOICE_SIDECAR_TOKEN` | random each start | shared secret |
 | `VOICE_SIDECAR_PORT` / `_HOST` | `8790` / `127.0.0.1` | listen address |
-| `VOICE_DEVICE` | `cpu` | `cpu` is faster and steadier than `mps` on Apple silicon (spike results) |
+| `VOICE_DEVICE` | `cpu` | `cpu` is faster and steadier than `mps` for OpenVoice on Apple silicon; Chatterbox: see its timings; `cuda` for NVIDIA is untested |
 | `VOICE_CKPT` | `models/v2` | OpenVoice V2 weights |
 | `VOICE_WATERMARK` | off | OpenVoice's `wavmark` watermark; its latency is untested |
-| `VOICE_ENGINE` | `openvoice` | `fake` makes tones, for testing the plumbing without models |
+| `VOICE_ENGINE` | `openvoice` | `openvoice`, `chatterbox` (needs `.venv-cb`), or `fake` (tones, for testing the plumbing without models) |
 | `VOICE_CORS` | Vite dev origins and `null` | browser origins allowed to call the API |
 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q       # 33 tests, no models needed (fake engine)
+.venv/bin/python -m pytest -q       # 47 tests, no models needed (fake engine)
 ```
 
 ## Limits
 
-- English only for now (EN-US base speaker). Other languages need other base speakers and weights.
+- English only for now. Other languages need other base speakers and weights (OpenVoice) or Chatterbox's multilingual models (not wired in).
 - One render at a time (the models are not thread-safe). Expect about a second per sentence on an M-series CPU.
 - Voice quality depends heavily on the recordings and has to be judged by listening.
 - A cloned voice is for its owner, or for someone the owner has authorised. Do not build a voice from anyone else's recordings.

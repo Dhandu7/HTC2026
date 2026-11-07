@@ -57,6 +57,8 @@ class SynthIn(BaseModel):
     tau: float = Field(0.3, description="randomness in the voice converter, 0.1 to 0.6. Not a similarity control: measured to change similarity by under 0.01")
     base: str = Field("EN-US", description="stock voice the result is built on; it sets accent, rhythm and intonation (see /health bases)")
     raw: bool = Field(False, description="return the stock base voice, before conversion (for A/B)")
+    exaggeration: float = Field(0.5, description="Chatterbox only: expressiveness, 0.25 to 1.5")
+    cfgWeight: float = Field(0.5, description="Chatterbox only: 0 to 1; lower follows the reference's pacing less strictly")
 
 
 def create_app(settings: Optional[Settings] = None, engine: Optional[Engine] = None, warm_in_background: bool = True) -> FastAPI:
@@ -91,7 +93,7 @@ def create_app(settings: Optional[Settings] = None, engine: Optional[Engine] = N
 
     @app.get("/health")
     def health():
-        return {"ok": True, "engine": engine.name, "device": engine.device, "warm": engine.warm, "version": __version__, "bases": engine.bases}
+        return {"ok": True, "engine": engine.name, "device": engine.device, "warm": engine.warm, "version": __version__, "bases": engine.bases, "capabilities": engine.capabilities}
 
     @app.get("/ui", response_class=HTMLResponse)
     def ui():
@@ -151,7 +153,7 @@ def create_app(settings: Optional[Settings] = None, engine: Optional[Engine] = N
         import time
 
         t0 = time.perf_counter()
-        wav, info = svc.synthesize(body.profileId, body.text, body.pace, body.tau, body.raw, body.base)
+        wav, info = svc.synthesize(body.profileId, body.text, body.pace, body.tau, body.raw, body.base, body.exaggeration, body.cfgWeight)
         return Response(
             wav,
             media_type="audio/wav",

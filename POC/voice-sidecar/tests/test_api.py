@@ -257,7 +257,7 @@ def test_export_contains_clips_embedding_and_consent(client):
     client.post(f"/v1/profiles/{pid}/build", headers=H)
     z = zipfile.ZipFile(io.BytesIO(client.get(f"/v1/profiles/{pid}/export", headers=H).content))
     names = set(z.namelist())
-    assert {"consent.json", "meta.json", "embedding.pth", "clips/clip-001.wav"} <= names
+    assert {"consent.json", "meta.json", "embedding-fake.pt", "clips/clip-001.wav"} <= names
     assert json.loads(z.read("consent.json"))["mode"] == "self"
 
 
@@ -409,6 +409,76 @@ def test_build_flags_clips_that_sound_unlike_the_rest(env):
     for i in range(2):
         add_clip(client, two, data=wav(*speechish(seed=i)))
     assert "flagged" not in client.post(f"/v1/profiles/{two}/build", headers=H).json()  # too few clips to judge
+
+
+# ---------------- voices are per engine ----------------
+
+
+def test_a_voice_built_with_one_engine_is_not_built_for_another(env):
+    client, settings, engine, data = env
+    from voice_sidecar.store import ProfileStore
+
+    pid = make_profile(client)
+    add_clip(client, pid)
+    client.post(f"/v1/profiles/{pid}/build", headers=H)
+    store = ProfileStore(data)
+    assert store.status(pid, "fake")["built"] is True
+    other = store.status(pid, "chatterbox")
+    assert other["built"] is False and other["builtWith"] == ["fake"]
+    assert store.embedding_path(pid, "fake").name == "embedding-fake.pt"
+    assert store.embedding_path(pid, "openvoice-v2").name == "embedding.pth"  # the original filename, so old profiles keep working
+
+
+def test_build_versions_only_go_up_so_old_cached_audio_can_never_match(client):
+    pid = make_profile(client)
+    add_clip(client, pid)
+    v1 = client.post(f"/v1/profiles/{pid}/build", headers=H).json()["embeddingVersion"]
+    add_clip(client, pid)  # invalidates the build
+    assert client.get(f"/v1/profiles/{pid}", headers=H).json()["embeddingVersion"] == 0
+    v2 = client.post(f"/v1/profiles/{pid}/build", headers=H).json()["embeddingVersion"]
+    assert (v1, v2) == (1, 2)
+
+
+def test_profiles_written_before_engines_were_tracked_still_load_as_openvoice(env):
+    client, _, _, data = env
+    from voice_sidecar.store import ProfileStore
+
+    pid = make_profile(client)
+    meta = data / "profiles" / pid / "meta.json"
+    m = json.loads(meta.read_text())
+    legacy = {"clips": m["clips"], "embeddingVersion": 3, "built": True, "paused": False, "nextClip": 1}  # the old shape
+    meta.write_text(json.dumps(legacy))
+    s = ProfileStore(data).status(pid, "openvoice-v2")
+    assert s["built"] is True and s["embeddingVersion"] == 3
+    assert ProfileStore(data).status(pid, "chatterbox")["built"] is False
+    assert ProfileStore(data).mark_built(pid, "openvoice-v2") == 4  # continues from the old counter
+
+
+def test_engine_options_reach_the_engine_and_are_clamped(env):
+    client, _, engine, _ = env
+    pid = make_profile(client)
+    add_clip(client, pid)
+    client.post(f"/v1/profiles/{pid}/build", headers=H)
+    client.post("/v1/synthesize", json={"profileId": pid, "text": "hi", "exaggeration": 9, "cfgWeight": -2}, headers=H)
+    assert (engine.renders[-1]["exaggeration"], engine.renders[-1]["cfg_weight"]) == (1.5, 0.0)
+    assert client.get("/health").json()["capabilities"]["exaggeration"] is True
+
+
+def test_choose_reference_leads_with_the_cleanest_clip_near_ten_seconds():
+    from voice_sidecar.chatterbox_engine import choose_reference
+
+    clips = [
+        {"path": "short", "seconds": 3.0, "warnings": ["short clip"], "clipped_pct": 0.0, "rms_db": -22},
+        {"path": "noisy", "seconds": 10.0, "warnings": ["quiet", "silence"], "clipped_pct": 0.5, "rms_db": -35},
+        {"path": "good", "seconds": 9.0, "warnings": [], "clipped_pct": 0.0, "rms_db": -20},
+        {"path": "long", "seconds": 20.0, "warnings": [], "clipped_pct": 0.0, "rms_db": -21},
+    ]
+    order = choose_reference(clips, first_target=10.0, cap=25.0)
+    assert order[0] == "good"
+    assert "short" in order or "noisy" in order or "long" in order  # more audio follows for the speaker embedding
+    total = {c["path"]: c["seconds"] for c in clips}
+    assert sum(total[p] for p in order) >= 25.0 or len(order) == len(clips)
+    assert choose_reference(clips[:1])[0] == "short"  # a lone clip is used as is
 
 
 # ---------------- real engine plumbing (no models loaded) ----------------

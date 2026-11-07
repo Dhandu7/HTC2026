@@ -6,8 +6,14 @@
 #   ./run.sh list | ./run.sh delete <profileId>
 set -euo pipefail
 cd "$(dirname "$0")"
-if [ ! -x .venv/bin/python ]; then
-  echo "Run ./setup.sh first." >&2
+# VOICE_ENGINE=chatterbox uses its own Python 3.11 environment (setup-chatterbox.sh); everything else uses .venv.
+if [ "${VOICE_ENGINE:-openvoice}" = "chatterbox" ]; then
+  PY=.venv-cb/bin/python; SETUP=./setup-chatterbox.sh
+else
+  PY=.venv/bin/python; SETUP=./setup.sh
+fi
+if [ ! -x "$PY" ]; then
+  echo "Run $SETUP first." >&2
   exit 1
 fi
-exec .venv/bin/python -W ignore -m voice_sidecar "${@:-serve}"
+exec "$PY" -W ignore -m voice_sidecar "${@:-serve}"

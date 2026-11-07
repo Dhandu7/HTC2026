@@ -18,6 +18,7 @@ class FakeEngine:
     device = "none"
     warm = True
     bases = ["EN-US", "EN-BR", "EN_INDIA", "EN-AU", "EN-Default"]
+    capabilities = {"pace": True, "base": True, "tau": True, "exaggeration": True, "cfg": True}
 
     def __init__(self):
         self.builds = 0
@@ -39,12 +40,12 @@ class FakeEngine:
     def clip_similarity(self, wav_paths: Sequence[Path]) -> "list[float]":
         return [1.0 for _ in wav_paths]
 
-    def synthesize(self, text: str, embedding_path: Path, pace: float = 1.0, tau: float = 0.3, raw: bool = False, base: str = "EN-US"):
+    def synthesize(self, text: str, embedding_path: Path, pace: float = 1.0, tau: float = 0.3, raw: bool = False, base: str = "EN-US", **opts):
         if not raw and not Path(embedding_path).is_file():
             raise EngineError("no embedding")
         if base not in self.bases:
             raise EngineError(f"unknown base voice {base!r}")
-        self.renders.append({"text": text, "pace": pace, "tau": tau, "raw": raw, "base": base})
+        self.renders.append({"text": text, "pace": pace, "tau": tau, "raw": raw, "base": base, **opts})
         sr = 24000
         seconds = max(0.3, len(text) * 0.06 / max(pace, 0.1))
         t = np.arange(int(sr * seconds)) / sr
