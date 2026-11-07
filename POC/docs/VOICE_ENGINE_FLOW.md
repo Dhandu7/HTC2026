@@ -14,7 +14,42 @@ This supersedes the **engine choice** in `VOICE_PLAN.md` (VoiceStudio). The prov
 | Fallback: system TTS now, Piper later | Never silent. Piper is an optional phase 3 swap |
 | XTTS-v2 is out of the default path | Weights and outputs are non-commercial. Hackathon-only if ever used, and it must be disclosed on Devpost |
 
-**Things I have not verified** (the review text states them; check before relying on them): OpenVoice V2's license and weight terms, its CPU latency, and whether V2 exposes emotion or speed control or only language and accent. Step 1 is a spike that settles all three on the demo machine.
+## Spike results (7 Nov 2026, step 1)
+
+Run on one machine: **Apple M5, 16 GB, macOS 26, Python 3.9.6, torch 2.8.0.** Reference voice: the macOS `Samantha` system voice reading 13.8 s of text (a neutral voice, so no real person was cloned). Script: `voice-sidecar/spike_openvoice.py`. Raw numbers: `voice-sidecar/spike-results-{cpu,mps}.json`. Pinned versions: `voice-sidecar/requirements.spike.txt`. Watermark off in these runs. n = 30 warm renders (10 phrases × 3 rounds). One machine and one reference clip, so treat these as an indication, not a benchmark.
+
+| | CPU | Apple GPU (MPS) |
+|---|---|---|
+| Warm render, p50 / p95 (base TTS + voice conversion) | **0.96 s / 1.95 s** | 0.95 s / 2.79 s |
+| Short phrases (≤20 chars), p50 | **0.75 s** | 0.79 s |
+| Longer phrases (up to ~70 chars), p50 / p95 | **1.42 s / 1.95 s** | 1.08 s / 2.79 s |
+| First render in a fresh process (cold) | 3.7 s | 15.7 s |
+| Profile extraction from 13.8 s of audio | 0.35 s | 3.3 s |
+| Model load (base TTS + converter) | ~1.1 s | ~2.1 s |
+| Python import (torch, MeloTTS) | ~12 s | ~13 s |
+| Peak memory | 2.4 GB | 1.4 GB |
+
+What this says:
+
+- **Use CPU on Apple silicon.** MPS gave no median gain, a worse tail (p95 2.8 s), a 15 s cold start and a slower profile build. Not worth the extra variance.
+- **Live rendering (T2) is "about a second", not instant.** Real-time factor is ~0.5 (renders in half the audio's length), but there is roughly 0.5 s of fixed cost per call. A 1.5 s start budget fits short phrases comfortably and long sentences only sometimes. This supports the plan: real recordings and the pre-render cache carry the experience, and T2 handles the rest with the system-voice fallback.
+- **The first request after sidecar start is slow** (3.7 s on CPU), and importing takes ~12 s. The sidecar must warm itself at app launch with one throwaway render, and the app should not offer T2 until `/health` says `warm: true`.
+- **A GPU host should help, but this spike did not measure one.** An NVIDIA instance is untested; the numbers above are the baseline to compare it against (see "Later: hosted GPU rendering").
+- **Pace is controllable.** `speed` 0.8 / 1.0 / 1.2 gave 2.32 s / 2.03 s / 1.65 s of audio for the same sentence.
+- **Emotion and accent style control are not exposed in V2's API.** The model card advertises "flexible voice style control", but the code exposes only `speed`, `sdp_ratio`, `noise_scale` and `noise_scale_w` on the base TTS and `tau` on the converter. Accent comes from picking the base speaker (EN-US, EN-BR, EN-AU, EN_INDIA, EN-Default). So `delivery` is pace only, as the LLM doc already assumes.
+- **Voice quality was not assessed.** I can't listen to audio. Someone needs to play the clips and judge whether the clone sounds like the reference. Sample files from this run are in the session scratchpad and are not committed.
+
+Licenses read (not legal advice): OpenVoice code MIT, MeloTTS code MIT, OpenVoice V2 weights MIT (Hugging Face model card), MeloTTS-English weights MIT, `bert-base-uncased` Apache-2.0. **Not yet checked:** the other BERT models MeloTTS downloads (it loads one per language at import), UniDic, `wavmark` (watermarking), and the NLTK data. Read those before shipping.
+
+Install gotchas found (all handled in the spike script or notes):
+
+- **Python 3.9 is required in practice.** The machine's default Python 3.14 cannot run this stack. Use a 3.9 venv.
+- **Upstream bug:** `ToneColorConverter(..., enable_watermark=...)` raises `TypeError` because the kwarg is read and then forwarded to the base class. Only the default (watermark on) works. The spike builds the converter without that kwarg.
+- **NLTK:** current NLTK needs the `averaged_perceptron_tagger_eng` resource, which MeloTTS's G2P library does not download.
+- **Download size:** ~526 MB UniDic dictionary (needed at import even for English), ~620 MB of Hugging Face models fetched on first render (the first process's 29 s "cold" render was mostly this download), 131 MB converter weights. The venv is 2.2 GB (UniDic is 789 MB of it). Ship these in the installer or fetch at first run; do not assume network at use time.
+- **Watermark path untested.** Whether `wavmark` adds noticeable latency is still open.
+
+**Verdict on step 1: go, with conditions.** OpenVoice V2 is licensed and fast enough for the T0/T1-first design on a modern laptop, and the live tier works as a ~1 s render. It is not proven on weaker hardware, and clone quality is unjudged. Next: listen to the samples, run the same script on one older or lower-end machine, and test the watermark on.
 
 ## How OpenVoice V2 shapes the design
 
@@ -32,7 +67,7 @@ Router picks the first tier that applies. Each tier falls through to the next on
 |---|---|---|---|
 | T0 | The user's **real recording** | Text matches an approved recorded phrase (normalized match) | ~10 ms |
 | T1 | **Cloned voice, pre-rendered** clip from the phrase cache | Text was rendered earlier (top phrases, emergency phrases, speculative renders) | ~10 ms |
-| T2 | **Cloned voice, live render** via the sidecar | New text the user just selected | ~0.5–3 s, measured in step 1 |
+| T2 | **Cloned voice, live render** via the sidecar | New text the user just selected | ~0.8 s short, ~1.4 s long, p50 on an M5 CPU (spike results below) |
 | T3 | **System voice** | Profile missing, not consented, paused, sidecar down, or T2 slower than the budget | ~100 ms |
 
 T2 starts only after the user selects the exact text (dwell on the chip, or Speak on typed text). Selecting is the confirmation. Nothing is ever spoken automatically.
@@ -115,6 +150,19 @@ Bound to `127.0.0.1`. Electron main generates a random token at launch and passe
 
 The renderer never sees the embedding file. The sidecar starts on app launch, warms the model with one tiny render, and is restarted by Electron main if `/health` fails.
 
+## Later: hosted GPU rendering (AWS EC2 with an NVIDIA GPU)
+
+Planned, not started. The goal is near-realtime speech on any device, including ones too weak to render locally. Nothing in the current work should make this harder:
+
+- **Same contract, different base URL.** The sidecar API above is the interface. `openvoice.ts` takes a base URL and token from config; local is `http://127.0.0.1:<port>`, hosted is an HTTPS endpoint. No shared filesystem is assumed: reference audio and embeddings travel over the API.
+- **Only T2 moves.** Recordings (T0), the pre-rendered cache (T1) and the system voice (T3) stay on the device, so the app still speaks offline or when the host is down. Remote replaces only the live render.
+- **Router config:** the T2 budget becomes per endpoint (local or hosted), and the router can try hosted first and fall back to local, or the reverse, by setting.
+- **Streaming:** a GPU host makes sentence-level streaming worth adding (return audio per sentence). The router's "started" signal already supports that.
+- **This is a privacy change, not just a deployment change.** Text, and either reference audio or the voice embedding, would leave the device. Before enabling it: new consent wording, an explicit opt-in separate from the voice-profile consent, encrypted transport and storage, per-user access control, a real delete on the server, and an update to the "recordings stay local" statements in the README and onboarding.
+- **To measure then:** end-to-end time to first audio from a typical home connection, cold start of the instance, cost per hour against usage, and behaviour when the connection drops mid-render.
+
+Spike numbers below are recorded per device (CPU, Apple GPU) so a GPU instance can be compared against them.
+
 ## Code layout (extends `VOICE_PLAN.md`)
 
 ```
@@ -169,7 +217,7 @@ Steps 1–4 and 7 give a safe demo: real-voice phrases, system-voice fallback, n
 
 | Step | State |
 |---|---|
-| 1 Spike (OpenVoice install, timings, licence check) | **Not started.** It means installing PyTorch and downloading model weights, so it needs an explicit go-ahead |
+| 1 Spike (OpenVoice install, timings, licence check) | **Done on one machine** (M5 laptop): results above. Still open: listening test, a weaker machine, watermark on, licenses of the remaining dependencies |
 | 2 Sidecar and `electron/sidecar.mjs` | Not started |
 | 3 `provider.ts`, `system.ts`, `pcmPlayer.ts`, `speak()` refactor | **Done.** `speak()` goes through `VoiceRouter` with the system voice registered, so behaviour is unchanged |
 | 4 `clips.ts` | Matcher and `RecordedClipVoice` done and tested. Recording UI, quality checks and clip storage not started |
