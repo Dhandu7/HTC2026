@@ -44,17 +44,24 @@ class RemoteVoiceMissing(ElevenLabsError):
     """The voice is already gone at ElevenLabs (404). For a delete that is the outcome we wanted."""
 
 
+_KEYLIKE = re.compile(r"sk_[A-Za-z0-9_\-]+")
+
+
 def _detail(resp: httpx.Response) -> str:
-    """The `msg` strings of a 422, nothing else: the `input` field of a validation error can echo user text."""
+    """ElevenLabs' own explanation, and nothing else: the `msg` strings of a validation error (its `input` field can
+    echo user text) or the `message`/`status` of an error object. Anything that looks like an API key is removed,
+    in case a message ever quotes one."""
     try:
         d = resp.json().get("detail")
     except Exception:
         return ""
     if isinstance(d, list):
-        return "; ".join(str(x.get("msg", "")) for x in d if isinstance(x, dict))[:300]
-    if isinstance(d, dict):
-        return str(d.get("message", ""))[:300]
-    return ""
+        text = "; ".join(str(x.get("msg", "")) for x in d if isinstance(x, dict))
+    elif isinstance(d, dict):
+        text = str(d.get("message") or d.get("status") or "")
+    else:
+        text = ""
+    return _KEYLIKE.sub("[removed]", text)[:300]
 
 
 def _raise_for(resp: httpx.Response, what: str) -> None:
@@ -64,7 +71,8 @@ def _raise_for(resp: httpx.Response, what: str) -> None:
     if code == 404:
         raise RemoteVoiceMissing(f"{what}: not found at ElevenLabs", 404)
     if code in (401, 403):
-        raise ElevenLabsError(f"{what}: ElevenLabs refused the request (check the API key, its permissions and the plan)", 502)
+        d = _detail(resp)
+        raise ElevenLabsError(f"{what}: ElevenLabs refused the request" + (f" ({d})" if d else "") + ". Check the API key, its permissions and the plan.", 502)
     if code == 422 or code == 400:
         d = _detail(resp)
         raise ElevenLabsError(f"{what}: ElevenLabs rejected the input" + (f" ({d})" if d else ""), 400)

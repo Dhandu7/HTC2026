@@ -112,3 +112,29 @@ def test_network_failures_become_gateway_errors_without_details():
 def test_an_empty_key_is_refused():
     with pytest.raises(ValueError):
         ElevenLabsClient("")
+
+
+def _refuse(status, detail):
+    import httpx
+
+    c = ElevenLabsClient(API_KEY, transport=httpx.MockTransport(lambda r: httpx.Response(status, json={"detail": detail})))
+    with pytest.raises(ElevenLabsError) as e:
+        c.synthesize("voice0000000001", "hi", "m", SETTINGS)
+    return e.value
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_refusal_carries_elevenlabs_own_explanation(status):
+    e = _refuse(status, {"status": "missing_permissions", "message": "The API key you used is missing the permission text_to_speech to execute this operation."})
+    assert e.status == 502
+    assert "missing the permission text_to_speech" in str(e) and "Check the API key, its permissions and the plan." in str(e)
+
+
+def test_a_refusal_with_only_a_status_code_still_says_something_useful():
+    assert "(invalid_api_key)" in str(_refuse(401, {"status": "invalid_api_key"}))
+    assert "Check the API key" in str(_refuse(401, "plain string detail"))  # no usable detail: the generic hint alone
+
+
+def test_anything_key_shaped_in_a_refusal_is_removed():
+    e = _refuse(401, {"message": "Invalid key sk_live_ABCdef123456 for this account"})
+    assert "sk_live_ABCdef123456" not in str(e) and "[removed]" in str(e)

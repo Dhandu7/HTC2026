@@ -242,6 +242,11 @@ describe("messages for people", () => {
     expect(refused).toMatch(/refused the request/);
     expect(refused).toMatch(/Starter plan/);
     expect(refused).toMatch(/hosted\.sh doctor/);
+    // when ElevenLabs explains the refusal, the person sees that explanation
+    const explained = describeError(new HostedVoiceError("speak: ElevenLabs refused the request (The API key you used is missing the permission text_to_speech). Check the API key, its permissions and the plan.", "upstream", 502));
+    expect(explained).toMatch(/refused the request: The API key you used is missing the permission text_to_speech\./);
+    expect(explained).toMatch(/text to speech and voices/);
+    expect(describeError(new HostedVoiceError("speak: ElevenLabs refused the request. Check the API key, its permissions and the plan.", "upstream", 502))).toMatch(/usually means the API key is missing or wrong/);
     expect(describeError(new HostedVoiceError("create voice: ElevenLabs returned an error (HTTP 500)", "upstream", 502))).toBe("The voice provider (ElevenLabs) had a problem. Try again in a moment.");
   });
 });
