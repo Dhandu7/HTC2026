@@ -20,6 +20,8 @@ const MAX_IMPLICIT = 240;
 
 export class GazeEngine {
   source: "camera" | "mouse" = "mouse";
+  /** Where calibration is saved; set per profile so each person keeps their own. */
+  storageKey = KEY_CAL;
   private regressor = new GazeRegressor(1.0, 4);
   private filter = new PointFilter(0.8, 0.015);
   private calSamples: Sample[] = [];
@@ -101,7 +103,7 @@ export class GazeEngine {
     this.implicit = [];
     this.refit();
     try {
-      localStorage.setItem(KEY_CAL, JSON.stringify(samples));
+      localStorage.setItem(this.storageKey, JSON.stringify(samples));
     } catch {
       /* storage full / disabled */
     }
@@ -109,7 +111,7 @@ export class GazeEngine {
 
   loadSavedCalibration(): boolean {
     try {
-      const raw = localStorage.getItem(KEY_CAL);
+      const raw = localStorage.getItem(this.storageKey);
       if (!raw) return false;
       const samples: Sample[] = JSON.parse(raw);
       if (samples[0]?.features.length !== this.recent.at(-1)?.vector.length) return false;

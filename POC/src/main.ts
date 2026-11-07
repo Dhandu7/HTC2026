@@ -6,7 +6,9 @@ import { runCalibration } from "./ui/calibration";
 import { BlinkSelector, DwellSelector, TargetTracker, type Rect, type SelectionMode } from "./input/selection";
 import { PredictionEngine } from "./predict/engine";
 import { CORE_WORDS, SEED_PHRASES, BENCHMARK_SENTENCES } from "./predict/vocab";
-import { llmAvailable } from "./predict/llm";
+import { llmAvailable, llmStatus, llmWarm, setLlmProfile } from "./predict/llm";
+import { splitSentences } from "./predict/engine";
+import { ProfileManager, pickSamples, type Profile } from "./profile/profiles";
 import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost } from "./ui/keyboards";
 import { TypingSession, normalizeText, type RunResult } from "./metrics/session";
 import { startVoiceCommands } from "./input/voice";
@@ -85,14 +87,20 @@ function showToast(html: string, ms = 4000) {
 const gaze = new GazeEngine();
 const tracker = new FaceTracker($("#video"));
 tracker.onFrame = gaze.handleFrame;
-const predictor = new PredictionEngine({
-  get: (k) => localStorage.getItem(k),
-  set: (k, v) => localStorage.setItem(k, v),
-});
+const profiles = new ProfileManager(localStorage);
+const predictor = new PredictionEngine(profiles.store(profiles.active.id));
+const CAL_KEY = "gazetype.calibration.v1";
+gaze.storageKey = profiles.keyFor(profiles.active.id, CAL_KEY);
 let lastError: ErrorStats | null = null;
 let llmOn = false;
 
-const host: KeyboardHost = { refresh: () => render(), action: (a) => void doAction(a), overlay: isOverlay };
+const host: KeyboardHost = {
+  refresh: () => render(),
+  action: (a) => void doAction(a),
+  overlay: isOverlay,
+  profiles: () => profiles.list(),
+  activeProfileId: () => profiles.active.id,
+};
 const gazeKb = new GazeTypeKeyboard(predictor, host);
 const baseKb = new BaselineKeyboard(predictor, host, settings.baselinePrediction);
 let kb: GazeTypeKeyboard | BaselineKeyboard = gazeKb;
@@ -145,6 +153,8 @@ function updateStatus() {
     gaze.implicitCount ? `+${gaze.implicitCount} auto-cal` : "",
     `${settings.selectionMode}${settings.selectionMode === "dwell" ? ` ${kb === gazeKb ? settings.dwellMs : settings.baselineDwellMs} ms` : ""}`,
     settings.selectionMode === "blink" ? `blinks ✓${blink.accepted} ✗${blink.rejectedShort + blink.rejectedLong}` : "",
+    `👤 ${esc(profiles.active.name)}`,
+    kb === gazeKb ? `predict ${gazeKb.lastSuggestMs.toFixed(1)} ms` : "",
     llmOn ? "✨ LLM on" : "on-device only",
   ];
   statusEl.innerHTML = parts.filter(Boolean).join(" · ");
@@ -276,6 +286,12 @@ function speak(text: string) {
 
 async function doAction(a: string) {
   const text = kb.text().trim();
+  if (a.startsWith("profile:")) {
+    switchProfile(a.slice("profile:".length));
+    showToast(`Now typing as <b>${esc(profiles.active.name)}</b>`);
+    render();
+    return;
+  }
   switch (a) {
     case "speak":
       speak(text);
@@ -506,13 +522,157 @@ async function enableVoice() {
   }
 }
 
+// ---------- profiles ----------
+const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+
+/** Everything that depends on who is typing: prediction data, calibration, LLM context. */
+function applyProfile(p: Profile) {
+  gaze.storageKey = profiles.keyFor(p.id, CAL_KEY);
+  setLlmProfile({ id: p.id, name: p.name, about: p.about, people: p.people, samples: p.samples });
+  $("#profile-btn").textContent = `👤 ${p.name}`;
+  fillProfileSelect($<HTMLSelectElement>("#profile-select"), p.id);
+  void llmWarm();
+}
+
+function switchProfile(id: string) {
+  if (id === profiles.active.id) return;
+  const p = profiles.setActive(id);
+  predictor.useStore(profiles.store(p.id));
+  applyProfile(p);
+  // Each person's eyes need their own calibration.
+  if (gaze.source === "camera" && !gaze.loadSavedCalibration()) showToast(`No calibration saved for ${esc(p.name)} yet: choose ◎ Calibrate.`);
+  kb.clear();
+}
+
+function fillProfileSelect(sel: HTMLSelectElement, selected: string) {
+  sel.innerHTML = profiles
+    .list()
+    .map((p) => `<option value="${p.id}"${p.id === selected ? " selected" : ""}>${esc(p.name)}</option>`)
+    .join("");
+}
+
+const pfDlg = $<HTMLDialogElement>("#profile-dlg");
+const pf = {
+  select: $<HTMLSelectElement>("#pf-select"),
+  name: $<HTMLInputElement>("#pf-name"),
+  about: $<HTMLTextAreaElement>("#pf-about"),
+  people: $<HTMLInputElement>("#pf-people"),
+  samples: $<HTMLTextAreaElement>("#pf-samples"),
+  learned: $("#pf-learned"),
+};
+let editingId = profiles.active.id;
+
+function loadProfileForm(id: string) {
+  editingId = id;
+  const p = profiles.list().find((x) => x.id === id)!;
+  fillProfileSelect(pf.select, id);
+  pf.name.value = p.name;
+  pf.about.value = p.about;
+  pf.people.value = p.people.join(", ");
+  pf.samples.value = "";
+  pf.learned.textContent = p.samples.length ? `${p.samples.length} of their own sentences are used as examples for AI suggestions.` : "";
+}
+
+function openProfiles() {
+  loadProfileForm(profiles.active.id);
+  pfDlg.showModal();
+}
+
+/** Save the form into the profile being edited and start using it. */
+function saveProfileForm() {
+  const people = pf.people.value.split(",").map((s) => s.trim()).filter(Boolean);
+  profiles.update(editingId, { name: pf.name.value.trim() || "Me", about: pf.about.value.trim(), people });
+  switchProfile(editingId);
+  predictor.setPinned(people);
+  applyProfile(profiles.active);
+  render();
+}
+
+pf.select.addEventListener("change", () => loadProfileForm(pf.select.value));
+$("#pf-save").addEventListener("click", () => {
+  saveProfileForm();
+  pfDlg.close();
+  showToast(`Typing as <b>${esc(profiles.active.name)}</b>`);
+});
+$("#pf-new").addEventListener("click", () => {
+  const p = profiles.create(`User ${profiles.list().length + 1}`);
+  loadProfileForm(p.id);
+  pf.name.select();
+});
+$("#pf-delete").addEventListener("click", () => {
+  const p = profiles.list().find((x) => x.id === editingId)!;
+  if (profiles.list().length <= 1) return void (pf.learned.textContent = "You can't delete the only profile.");
+  if (!confirm(`Delete ${p.name} and everything they've taught the keyboard? This can't be undone.`)) return;
+  const wasActive = p.id === profiles.active.id;
+  profiles.remove(p.id);
+  if (wasActive) {
+    predictor.useStore(profiles.store(profiles.active.id));
+    applyProfile(profiles.active);
+    kb.clear();
+  }
+  loadProfileForm(profiles.active.id);
+  render();
+});
+$<HTMLInputElement>("#pf-file").addEventListener("change", async (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (file) pf.samples.value = await file.text();
+});
+$("#pf-learn").addEventListener("click", () => {
+  const text = pf.samples.value;
+  if (!text.trim()) return void (pf.learned.textContent = "Paste some text or choose a .txt file first.");
+  saveProfileForm(); // learning goes into the profile being edited, so make it active
+  const n = predictor.ingest(text);
+  const p = profiles.active;
+  const samples = pickSamples([...p.samples, ...splitSentences(text)]);
+  profiles.update(p.id, { samples });
+  applyProfile(profiles.active);
+  pf.samples.value = "";
+  pf.learned.textContent = `Learned from ${n} sentences. ${samples.length} are used as examples for AI suggestions.`;
+});
+$("#pf-export").addEventListener("click", () => {
+  const p = profiles.list().find((x) => x.id === editingId)!;
+  const blob = new Blob([profiles.exportProfile(p.id)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `gazetype-profile-${p.name.replace(/\W+/g, "-").toLowerCase()}.json`;
+  a.click();
+});
+$<HTMLInputElement>("#pf-import").addEventListener("change", async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  try {
+    const p = profiles.importProfile(await file.text());
+    loadProfileForm(p.id);
+    pf.learned.textContent = `Imported ${p.name}. Choose Save & use to switch to them.`;
+  } catch (err) {
+    pf.learned.textContent = `Couldn't import: ${(err as Error).message}`;
+  }
+});
+$("#profile-btn").addEventListener("click", openProfiles);
+$("#profile-manage").addEventListener("click", openProfiles);
+$<HTMLSelectElement>("#profile-select").addEventListener("change", (e) => {
+  switchProfile((e.target as HTMLSelectElement).value);
+  render();
+});
+
 // ---------- boot ----------
 async function boot() {
   const words = await fetch("./data/words-10k.txt").then((r) => r.text());
   predictor.load(words.split("\n"), CORE_WORDS, SEED_PHRASES);
+  applyProfile(profiles.active);
   gazeKb.update();
   render();
   llmOn = await llmAvailable();
+  const st = llmStatus();
+  const llmEl = $("#llm-status");
+  llmEl.className = `llm-status ${st.on ? "on" : "off"}`;
+  llmEl.textContent = st.on
+    ? `✨ AI suggestions on${st.fastModel ? ` (${st.fastModel})` : ""}`
+    : st.reason === "no-key"
+      ? "AI suggestions off: the LLM server has no API key. Add ANTHROPIC_API_KEY to POC/.env and restart it."
+      : "AI suggestions off: LLM server not running (npm run dev:all). On-device prediction still works.";
   try {
     const le = localStorage.getItem("gazetype.lastError.v1");
     if (le) lastError = JSON.parse(le);

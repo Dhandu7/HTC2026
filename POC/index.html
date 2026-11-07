@@ -10,6 +10,7 @@
       <header id="topbar">
         <div id="output" aria-live="polite"></div>
         <nav id="controls">
+          <button id="profile-btn" type="button">👤</button>
           <button id="kb-toggle" type="button">Keyboard: GazeType</button>
           <button id="bench-btn" type="button">⏱ Benchmark</button>
           <button id="results-btn" type="button">📊 Results</button>
@@ -30,6 +31,11 @@
           <button id="start-camera" class="primary" type="button">👁 Start with camera</button>
           <button id="start-mouse" type="button">🖱 Mouse mode (demo / dev)</button>
         </div>
+        <div class="home-profile">
+          <label>Typing as <select id="profile-select"></select></label>
+          <button id="profile-manage" type="button">Edit profiles</button>
+        </div>
+        <p id="llm-status" class="llm-status">Checking AI suggestions…</p>
         <p class="home-msg"></p>
         <p class="fine">Video never leaves this device. Communication aid prototype — not a medical device.</p>
         <p class="fine" id="shortcut-hint"></p>
@@ -62,6 +68,39 @@
         <label><input name="hotCorner" type="checkbox" /> Overlay: open by looking at top-right corner</label>
         <label><input name="voice" type="checkbox" /> Offline voice commands (“gaze type”, “hide keyboard”)</label>
         <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Save</button></menu>
+      </form>
+    </dialog>
+
+    <dialog id="profile-dlg">
+      <form method="dialog">
+        <h2>Profiles</h2>
+        <p class="fine">Each person gets their own words, phrases and calibration. Everything stays on this device.</p>
+        <label>Profile <select id="pf-select"></select></label>
+        <label>Name <input id="pf-name" type="text" maxlength="60" /></label>
+        <label class="stack">About them: interests, how they talk, what they often need
+          <textarea id="pf-about" rows="3" maxlength="2000" placeholder="Retired teacher, loves hockey and gardening. Dry sense of humour."></textarea>
+        </label>
+        <label class="stack">People in their life (comma-separated: family, carers, pets)
+          <input id="pf-people" type="text" placeholder="Priya, Sam, Nurse Alex, Biscuit" />
+        </label>
+        <fieldset>
+          <legend>Teach it how they write</legend>
+          <p class="fine">Paste old texts, emails or posts, or choose a .txt file. Their own sentences get a head start in prediction, and a sample guides AI suggestions.</p>
+          <textarea id="pf-samples" rows="5" placeholder="Paste text here..."></textarea>
+          <div class="row-btns">
+            <input id="pf-file" type="file" accept=".txt,text/plain" />
+            <button id="pf-learn" type="button">Learn from this text</button>
+          </div>
+          <p id="pf-learned" class="fine" aria-live="polite"></p>
+        </fieldset>
+        <menu>
+          <button id="pf-new" type="button">+ New</button>
+          <button id="pf-delete" type="button">Delete</button>
+          <button id="pf-export" type="button">Export</button>
+          <label class="filebtn">Import<input id="pf-import" type="file" accept=".json,application/json" hidden /></label>
+          <button value="cancel" formnovalidate>Close</button>
+          <button id="pf-save" type="button" class="primary">Save &amp; use</button>
+        </menu>
       </form>
     </dialog>
 

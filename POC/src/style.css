@@ -105,3 +105,22 @@ body.overlay.collapsed #pill span { display: grid; place-items: center; width: 4
 body.overlay.collapsed { background: transparent !important; }
 #target-bar button { margin-left: 12px; background: var(--key); border: 1px solid #30363d; border-radius: 8px; padding: 4px 10px; cursor: pointer; font-size: 14px; }
 body.overlay.collapsed #pill { cursor: pointer; }
+
+/* ---- profiles ---- */
+.board.gazetype.panel3x4 { grid-template-rows: repeat(3, 1fr); }
+.key.action.current { border-color: var(--ok); }
+.home-profile { display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; margin: 8px 0; }
+.home-profile select { background: var(--key); color: var(--text); border: 1px solid #30363d; border-radius: 8px; padding: 6px 8px; font: inherit; }
+.home-profile button { background: var(--key); border: 1px solid #30363d; border-radius: 10px; padding: 6px 12px; cursor: pointer; }
+#profile-dlg { width: min(640px, 94vw); max-height: 92vh; }
+dialog label.stack { flex-direction: column; align-items: stretch; }
+dialog input[type="text"], dialog textarea { background: var(--key); color: var(--text); border: 1px solid #30363d; border-radius: 8px; padding: 8px; font: inherit; width: 100%; }
+dialog label:not(.stack) input[type="text"] { width: 260px; }
+dialog fieldset { border: 1px solid #30363d; border-radius: 12px; margin: 14px 0 0; padding: 8px 14px 4px; }
+dialog .row-btns { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 8px; flex-wrap: wrap; }
+dialog button, dialog .filebtn { background: var(--key); border: 1px solid #30363d; border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+dialog .filebtn { margin: 0; display: inline-block; }
+dialog menu { flex-wrap: wrap; }
+.llm-status { font-size: 14px; margin: 6px 0; color: var(--muted); }
+.llm-status.on { color: var(--ok); }
+.llm-status.off { color: var(--accent-2); }
