@@ -66,6 +66,34 @@ Reading: OpenVoice V2 changes **timbre only**. For a person whose accent, pacing
 2. **Try an engine that clones prosody as well as timbre** from a short reference, on the same clips, side by side with OpenVoice. Candidates from the review: Chatterbox, Qwen3-TTS (permissive licenses, to be verified), and F5-TTS or XTTS-v2 (non-commercial, usable only for a hackathon demo). The `Engine` interface in `voice-sidecar/voice_sidecar/engine.py` is meant for this. These are heavier and probably want the hosted GPU.
 3. Keep OpenVoice as a lightweight fallback, labelled honestly, rather than the headline feature.
 
+### Chatterbox test (7 Nov 2026): better on long sentences by one yardstick, far too slow on this Mac
+
+Tested on the owner's own clips (38 s of reference, 8 clips; Chatterbox conditions on about the first 10 s). Chatterbox (Resemble AI, 500M English, MIT code and weights), Python 3.11, torch 2.6, Apple GPU (MPS). Script: `voice-sidecar/spikes/chatterbox_spike.py`; raw numbers in `chatterbox-results-mps.json`. Same sentences rendered by OpenVoice from the same clips for comparison.
+
+| | Chatterbox (MPS) | OpenVoice (CPU, from the earlier spike) |
+|---|---|---|
+| Warm render, median | **25 s** (9 s of compute per second of audio) | 1 to 2 s |
+| First render in a fresh process | 46 s | 3.7 s |
+| Preparing the voice from the reference | 31 s | 0.35 s |
+| Model load (incl. a 3 GB first-time download) | 172 s | about 1 s |
+| Peak memory | 3.0 GB | 2.4 GB |
+
+Speaker similarity, scored with Chatterbox's own voice encoder (so it favours Chatterbox; the owner's clips against their own average score 0.90 to 0.95):
+
+| Sentence | Chatterbox | OpenVoice EN-US | OpenVoice EN-Default |
+|---|---|---|---|
+| Long (51 chars) | 0.85 | 0.77 | 0.79 |
+| Long (64 chars) | 0.90 | 0.82 | 0.80 |
+| "Yes." / "Please wait a moment." (short) | 0.71 / 0.59 | not scored | not scored |
+
+What this says:
+
+- **Not usable for live speech on a Mac.** 12 to 38 s per sentence, with the machine also busy with iCloud sync. Real-time needs an NVIDIA GPU, which this test did not have, so Chatterbox's real speed is unmeasured. This points directly at the hosted GPU plan.
+- **A modest gain on longer sentences, and a loss on short phrases**, by a yardstick biased toward Chatterbox. The numbers alone do not show a decisive win. **Listening is the real test**, and the owner's verdict on the clips decides whether this is worth pursuing.
+- **The project is retired.** Its README says that as of August 2026 it is unmaintained, with no updates or support. MIT code stays usable, but there will be no fixes.
+- It always embeds an inaudible watermark (Perth) in its output, which helps with labelling AI speech.
+- **Turbo (350M, one-step decoder) and Nano (110M, built for CPU) were not tested.** If Chatterbox sounds right, Turbo is the one to try for latency, on an NVIDIA GPU.
+
 Install gotchas found (all handled in the spike script or notes):
 
 - **Python 3.9 is required in practice.** The machine's default Python 3.14 cannot run this stack. Use a 3.9 venv.
