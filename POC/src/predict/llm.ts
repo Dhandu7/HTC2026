@@ -38,8 +38,8 @@ export function setLlmProfile(p: LlmProfile | undefined) {
   cache.clear();
 }
 
-export async function llmAvailable(): Promise<boolean> {
-  if (available !== null) return available;
+export async function llmAvailable(refresh = false): Promise<boolean> {
+  if (available !== null && !refresh) return available;
   try {
     const r = await fetch(`${base()}/api/health`, { signal: AbortSignal.timeout(1500) });
     const h = r.ok ? await r.json() : {};

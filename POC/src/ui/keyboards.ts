@@ -33,6 +33,9 @@ const btn = (id: string, label: string, cls = "", sub = "") =>
 
 type Panel = "main" | "phrases" | "menu" | "profiles" | { letters: string };
 
+/** Longer chip text gets a smaller font so it fits the target instead of being cut off. */
+const chipSize = (label: string) => (label.length > 34 ? " xlong" : label.length > 16 ? " long" : "");
+
 /** Wait this long after the last selection before asking the LLM, so quick selections send one request. */
 const LLM_DEBOUNCE_MS = 150;
 /** A chip that is deleted within this time counts as a rejected suggestion. */
@@ -109,10 +112,13 @@ export class GazeTypeKeyboard implements Keyboard {
     }
   }
 
-  /** Chips shown: local first, then at most one LLM sentence in the last slot. */
+  /** Chips shown: local first, then at most one LLM sentence in the last slot (unless a phrase chip already says it). */
   private visibleChips(): (Suggestion | null)[] {
     const out: (Suggestion | null)[] = this.chips.slice(0, 4);
-    if (this.llmChips.length) out.splice(3, 1, this.llmChips[0]);
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z' ]/g, "").trim();
+    const shown = new Set(this.chips.map((c) => norm(c.label)));
+    const ai = this.llmChips.find((c) => !shown.has(norm(c.label)));
+    if (ai) out.splice(3, 1, ai);
     while (out.length < 4) out.push(null);
     return out;
   }
@@ -130,7 +136,7 @@ export class GazeTypeKeyboard implements Keyboard {
       const chips = this.visibleChips()
         .map((c, i) =>
           c
-            ? btn(`chip:${i}`, esc(c.kind === "word" ? c.label : `${c.label}`), `chip ${c.kind}`, c.kind === "llm" ? "✨ AI" : c.kind === "phrase" ? "phrase" : "")
+            ? btn(`chip:${i}`, esc(c.label), `chip ${c.kind}${chipSize(c.label)}`, c.kind === "llm" ? "✨ AI" : c.kind === "phrase" ? "phrase" : "")
             : `<div class="key chip empty"></div>`,
         )
         .join("");
@@ -163,7 +169,8 @@ export class GazeTypeKeyboard implements Keyboard {
         (this.host.overlay ? btn("act:hide", "✖ Hide", "action") : btn("act:settings", "⚙ Settings", "action")) +
         btn("act:profiles", "👤 Switch user", "action", esc(me?.name ?? "")) +
         btn("act:benchmark-done", "⏱ Finish run", "action") +
-        `<div class="key empty"></div>`.repeat(3) +
+        btn("act:recenter", "⊕ Re-center", "action", "or blink 3×") +
+        `<div class="key empty"></div>`.repeat(2) +
         btn("back", "↩ Back", "ctrl");
       root.className = "board gazetype panel3x4";
     } else if (p === "profiles") {
@@ -197,7 +204,9 @@ export class GazeTypeKeyboard implements Keyboard {
   }
 
   private commitSentence(full: string) {
-    this.committed = full.trim().split(/\s+/);
+    const words = full.trim().split(/\s+/).map((w) => (w === "i" ? "I" : w));
+    if (words.length) words[0] = cap(words[0]);
+    this.committed = words;
     this.slots = [];
   }
 

@@ -124,3 +124,18 @@ dialog menu { flex-wrap: wrap; }
 .llm-status { font-size: 14px; margin: 6px 0; color: var(--muted); }
 .llm-status.on { color: var(--ok); }
 .llm-status.off { color: var(--accent-2); }
+
+
+/* ---- long suggestion chips: shrink to fit (up to 3 lines) instead of being cut off ---- */
+.key.chip.long .lbl { font-size: clamp(15px, 1.9vw, 26px); line-height: 1.15; }
+.key.chip.xlong .lbl { font-size: clamp(13px, 1.5vw, 21px); line-height: 1.15; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* ---- lost pointer / re-center ---- */
+#cursor.lost { border-style: dashed; border-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+#gaze-hint { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 55; background: #2a1414; border: 2px solid var(--bad); border-radius: 16px; padding: 18px 26px; font-size: clamp(20px, 2.6vw, 32px); font-weight: 600; text-align: center; max-width: 80vw; pointer-events: none; }
+#gaze-hint[hidden] { display: none; }
+.recenter-msg { top: 30%; color: var(--text); font-size: 30px; }
+
+/* ---- head moved away from the calibration position ---- */
+#head-hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 54; background: #2a2108; border: 2px solid var(--accent-2); border-radius: 12px; padding: 10px 20px; font-size: clamp(16px, 2vw, 24px); font-weight: 600; pointer-events: none; max-width: 90vw; text-align: center; }
+#head-hint[hidden] { display: none; }

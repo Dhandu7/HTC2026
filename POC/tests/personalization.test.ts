@@ -153,3 +153,61 @@ describe("text helpers", () => {
     expect(pickSamples(["too short", "this one is long enough"])).toEqual(["this one is long enough"]);
   });
 });
+
+describe("suggestions on longer sentences", () => {
+  it("starter phrases don't pile up in a profile each time the app loads", () => {
+    const store = memoryStore();
+    const e1 = engine(store);
+    e1.ingest("I want to watch the hockey game. The hockey game starts at seven.");
+    for (let i = 0; i < 5; i++) engine(store); // five more app launches
+    const e = engine(store);
+    // The user's own "the hockey" (imported twice) beats every starter phrase after "the".
+    expect(e.nextWords(["watch", "the"], 1)[0].text).toBe("hockey");
+    expect(e.nextWords(["tell", "the"], 1)[0].text).toBe("hockey");
+  });
+  it("upgrades old saved data, dropping the repeated starter phrases", () => {
+    const store = memoryStore();
+    // A v1 profile: "the nurse" inflated by repeated seeding, one real sentence in the phrase store.
+    store.set("gazetype.bigrams.v1", JSON.stringify([["the", [["nurse", 3], ["hockey", 0.6]]]]));
+    store.set("gazetype.phrases.v1", JSON.stringify([{ text: "I love the hockey game", count: 2, last: 1 }, { text: "I need the nurse", count: 1, last: 0 }]));
+    const e = engine(store);
+    expect(e.nextWords(["love", "the"], 1)[0].text).toBe("hockey");
+  });
+  it("never leaves suggestion slots empty after an unfamiliar word", () => {
+    const e = engine();
+    e.ingest("Priya is coming over later.");
+    const s = e.nextWords(["after", "dinner"], 4);
+    expect(s).toHaveLength(4);
+    expect(s.map((x) => x.text)).not.toContain("dinner");
+  });
+  it("offers a stored phrase from the middle of a sentence", () => {
+    const e = engine();
+    e.ingest("Tell Priya I love her.");
+    const s = e.phraseCompletions(["after", "dinner", "can", "you", "tell"], [], 3);
+    expect(s[0]?.text).toBe("Priya I love her");
+  });
+  it("doesn't anchor a mid-sentence phrase on a lone common word", () => {
+    const e = engine();
+    e.ingest("The hockey game starts at seven.");
+    expect(e.phraseCompletions(["i", "want", "the"], [], 3)).toHaveLength(0);
+    expect(e.phraseCompletions(["i", "want", "the", "hockey"], [], 3)[0].text).toBe("game starts at seven");
+  });
+  it("keeps phrase chips short and correctly capitalised", () => {
+    const e = engine();
+    e.setPinned(["Priya"]);
+    e.ingest("tell priya i will be home after the game tonight");
+    const [s] = e.phraseCompletions([], [], 1);
+    expect(s.text.split(" ")).toHaveLength(6);
+    expect(s.text).toBe("Tell Priya I will be home");
+    // The rest comes up as the next chip once those words are in.
+    expect(e.phraseCompletions(["tell", "priya", "i", "will", "be", "home"], [], 1)[0].text).toBe("after the game tonight");
+  });
+  it("boosts topic words from the profile's about note", () => {
+    const e = engine();
+    const before = e.wordCandidates([], slotsFor("goo"), 5).map((s) => s.text);
+    e.setTopics("Loves gardening and the goose at the lake");
+    const after = e.wordCandidates([], slotsFor("goo"), 5).map((s) => s.text);
+    expect(after.indexOf("goose")).toBeGreaterThanOrEqual(0);
+    expect(after.indexOf("goose")).toBeLessThan(before.includes("goose") ? before.indexOf("goose") : 99);
+  });
+});

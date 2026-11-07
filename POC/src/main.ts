@@ -2,7 +2,8 @@ import "./style.css";
 import { FaceTracker } from "./gaze/tracker";
 import { GazeEngine, type GazePoint } from "./gaze/engine";
 import { estimateDistanceCm, type ErrorStats, type ViewingGeometry } from "./gaze/accuracy";
-import { runCalibration } from "./ui/calibration";
+import { runCalibration, runRecenter } from "./ui/calibration";
+import { BlinkBurstDetector } from "./input/gestures";
 import { BlinkSelector, DwellSelector, TargetTracker, type Rect, type SelectionMode } from "./input/selection";
 import { PredictionEngine } from "./predict/engine";
 import { CORE_WORDS, SEED_PHRASES, BENCHMARK_SENTENCES } from "./predict/vocab";
@@ -13,6 +14,8 @@ import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost } from "./ui/keyb
 import { TypingSession, normalizeText, type RunResult } from "./metrics/session";
 import { startVoiceCommands } from "./input/voice";
 import { cloudVoiceAvailable, speakText } from "./voice/elevenlabsVoice";
+import { recordSession } from "./record/recorder";
+import type { SessionMeta } from "./record/format";
 
 // ---------- Electron bridge (absent in the browser) ----------
 interface Bridge {
@@ -37,6 +40,8 @@ interface Settings {
   showCursor: boolean;
   hotCorner: boolean;
   voice: boolean;
+  /** Three quick blinks re-center a drifting pointer. */
+  blinkRecenter: boolean;
 }
 const DEFAULTS: Settings = {
   selectionMode: "dwell",
@@ -48,6 +53,7 @@ const DEFAULTS: Settings = {
   hfovDeg: 60,
   showCursor: true,
   hotCorner: true,
+  blinkRecenter: true,
   voice: false,
 };
 const load = <T>(k: string, d: T): T => {
@@ -162,8 +168,50 @@ function updateStatus() {
 }
 setInterval(updateStatus, 500);
 
+// ---------- head position ----------
+// Webcam gaze is calibrated for one head position. If the head has been somewhere else for
+// over a second, say how to get back; hide again once it's been back for half a second.
+const headHint = $("#head-hint");
+let headBadSince: number | null = null;
+let headOkSince: number | null = null;
+setInterval(() => {
+  const active = expanded && home.hidden && calRoot.hidden;
+  const hc = active ? gaze.headCheck() : null;
+  const now = performance.now();
+  if (!hc || hc.ok) {
+    headBadSince = null;
+    headOkSince ??= now;
+    if (!hc || now - headOkSince > 500) headHint.hidden = true;
+    return;
+  }
+  headOkSince = null;
+  headBadSince ??= now;
+  if (now - headBadSince > 1000) {
+    headHint.textContent = `${hc.advice}: back to where you were when calibrating`;
+    headHint.hidden = false;
+  }
+}, 250);
+
 // ---------- selection ----------
 let pendingImplicit: { timer: number } | null = null;
+
+/**
+ * Auto-calibration samples from the sentence being typed. They only teach the gaze model once
+ * the user accepts the sentence (speaks, inserts or copies it): selections made while the
+ * pointer was drifting, then fixed or abandoned, would otherwise make the drift worse.
+ */
+let sentenceSamples: { features: number[]; x: number; y: number }[] = [];
+
+function acceptSentenceSamples() {
+  // A selection far from where the model thought the eyes were is more likely a mistake than a correction.
+  const limit = Math.max(150, 2.5 * (lastError?.meanPx ?? 60));
+  const off = gaze.driftOffset;
+  for (const s of sentenceSamples) {
+    const p = gaze.predictRaw(s.features);
+    if (Math.hypot(p.x + off.x - s.x, p.y + off.y - s.y) <= limit) gaze.addImplicitSample(s.features, s.x, s.y);
+  }
+  sentenceSamples = [];
+}
 
 function applySelection(id: string, t: number) {
   const el = board.querySelector<HTMLElement>(`[data-target="${CSS.escape(id)}"]`);
@@ -172,6 +220,8 @@ function applySelection(id: string, t: number) {
     clearTimeout(pendingImplicit.timer);
     pendingImplicit = null;
   }
+  // Cleared the whole sentence: nothing typed in it was right, so learn nothing from it.
+  if (kind === "delete" && !kb.text().trim()) sentenceSamples = [];
   session.record(t, kind);
   // Implicit recalibration: if this selection isn't undone within 2 s, treat the
   // fixation before it as a labelled sample at the target's centre.
@@ -183,7 +233,7 @@ function applySelection(id: string, t: number) {
       if (pendingImplicit) clearTimeout(pendingImplicit.timer);
       pendingImplicit = {
         timer: window.setTimeout(() => {
-          gaze.addImplicitSample(feats, r.left + r.width / 2, r.top + r.height / 2);
+          sentenceSamples.push({ features: feats, x: r.left + r.width / 2, y: r.top + r.height / 2 });
           pendingImplicit = null;
         }, 2000),
       };
@@ -214,9 +264,12 @@ function onGaze(g: GazePoint) {
     cursor.style.transform = `translate(${g.x - r}px, ${g.y - r}px)`;
     cursor.style.width = cursor.style.height = `${2 * r}px`;
   }
+  cursor.classList.toggle("lost", !!g.offscreen);
   if (!calRoot.hidden || !home.hidden) return;
+  updateLostHint(g);
   measure();
-  const target = g.valid ? targetTracker.update(g.t, rects, g.x, g.y) : null;
+  // An off-screen estimate is pinned to the edge; selecting from there would hit an edge key by accident.
+  const target = g.valid && !g.offscreen ? targetTracker.update(g.t, rects, g.x, g.y) : null;
   let out;
   if (settings.selectionMode === "blink" && g.source === "camera") out = blink.update(g.t, target, g.blinkL, g.blinkR);
   else if (settings.selectionMode === "click") out = { selected: null, progress: 0, target };
@@ -237,6 +290,76 @@ function onGaze(g: GazePoint) {
   if (out.selected) applySelection(out.selected, g.t);
 }
 gaze.onGaze(onGaze);
+
+// ---------- re-centering a drifting pointer ----------
+const gazeHint = $("#gaze-hint");
+const blinkBurst = new BlinkBurstDetector();
+let lostSince: number | null = null;
+let recentering = false;
+
+/** After the pointer has been off the screen for 2 s, say how to get it back. */
+function updateLostHint(g: GazePoint) {
+  if (g.source !== "camera" || !g.offscreen) {
+    lostSince = null;
+    gazeHint.hidden = true;
+    return;
+  }
+  lostSince ??= g.t;
+  if (g.t - lostSince < 2000 || !gazeHint.hidden) return;
+  gazeHint.textContent = settings.blinkRecenter
+    ? "Pointer lost. Blink 3 times quickly to re-center."
+    : "Pointer lost. Press R to re-center, or turn on blink re-centering in Settings.";
+  gazeHint.hidden = false;
+}
+
+// Three quick blinks re-center the pointer, wherever it has drifted to.
+gaze.onRaw((f) => {
+  if (!f || !settings.blinkRecenter || gaze.source !== "camera" || !gaze.calibrated) return;
+  if (!expanded || recentering || !calRoot.hidden || !home.hidden) return;
+  if (blinkBurst.update(f.t, f.blinkL, f.blinkR)) void recenter();
+});
+
+// A caregiver can also press R.
+window.addEventListener("keydown", (e) => {
+  const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement;
+  if ((e.key === "r" || e.key === "R") && !typing && !e.ctrlKey && !e.metaKey && !e.altKey && !document.querySelector("dialog[open]")) void recenter();
+});
+
+async function recenter() {
+  if (gaze.source !== "camera" || !gaze.calibrated) {
+    showToast("Re-centering needs the camera and a calibration first.");
+    return;
+  }
+  if (recentering || !calRoot.hidden) return;
+  recentering = true;
+  // Selections made while drifting must not become calibration samples.
+  if (pendingImplicit) {
+    clearTimeout(pendingImplicit.timer);
+    pendingImplicit = null;
+  }
+  sentenceSamples = [];
+  gazeHint.hidden = true;
+  lostSince = null;
+  try {
+    const r = await runRecenter(gaze, calRoot);
+    const small = Math.min(innerWidth, innerHeight);
+    if (!r.ok)
+      showToast(
+        r.reason === "no-face"
+          ? "Couldn't see your eyes. Check the light and camera, then try again."
+          : "Couldn't get a steady look at the dot. Try again and keep your eyes on it.",
+        5000,
+      );
+    else if (r.shiftPx! > small * 0.25)
+      showToast(`Re-centered (moved ${Math.round(r.shiftPx!)} px). That was a big drift: a full ◎ Recalibrate will track better.`, 6000);
+    else showToast(`Re-centered (moved ${Math.round(r.shiftPx!)} px).`, 2500);
+  } finally {
+    recentering = false;
+    blinkBurst.reset();
+    dwell.reset();
+    targetTracker.reset();
+  }
+}
 
 // ---------- overlay: show/hide ----------
 function setExpanded(v: boolean, fromMain = false) {
@@ -296,6 +419,7 @@ async function doAction(a: string) {
   switch (a) {
     case "speak":
       speak(text);
+      if (text) acceptSentenceSamples();
       if (!benchmark && text) {
         predictor.learn(text);
         kb.clear();
@@ -303,6 +427,7 @@ async function doAction(a: string) {
       break;
     case "insert":
       if (text && bridge) {
+        acceptSentenceSamples();
         predictor.learn(text);
         const ok = await bridge.insertText(text);
         showToast(ok ? "Inserted into the focused app" : "Copied — press ⌘V / Ctrl+V to paste (grant Accessibility for auto-paste)");
@@ -312,6 +437,7 @@ async function doAction(a: string) {
     case "copy":
       if (text) {
         await navigator.clipboard.writeText(text).catch(() => {});
+        acceptSentenceSamples();
         predictor.learn(text);
         showToast("Copied to clipboard");
       }
@@ -321,6 +447,9 @@ async function doAction(a: string) {
       break;
     case "recal":
       await calibrate();
+      break;
+    case "recenter":
+      await recenter();
       break;
     case "settings":
       openSettings();
@@ -394,6 +523,40 @@ $("#kb-toggle").addEventListener("click", () => {
   render();
 });
 $("#recal").addEventListener("click", () => void calibrate());
+$("#record-btn").addEventListener("click", openRecord);
+
+// ---------- session recording (offline evaluation) ----------
+function openRecord() {
+  if (gaze.source !== "camera") {
+    showToast("Recording needs the camera. You're in mouse mode.");
+    return;
+  }
+  const dlg = $<HTMLDialogElement>("#record");
+  const form = dlg.querySelector("form")!;
+  dlg.onclose = async () => {
+    if (dlg.returnValue !== "ok") return;
+    const fd = new FormData(form);
+    const g = geometry();
+    const meta: SessionMeta = {
+      participant: String(fd.get("participant") ?? "").trim(),
+      mode: fd.get("mode") === "short" ? "short" : "full",
+      glasses: fd.get("glasses") === "on",
+      lighting: String(fd.get("lighting") ?? ""),
+      notes: String(fd.get("notes") ?? ""),
+      distanceCm: Number(fd.get("distanceCm")) || 0,
+      screenDiagonalIn: g.screenDiagonalIn,
+      hfovDeg: settings.hfovDeg,
+    };
+    const n = await recordSession(gaze, tracker, calRoot, { meta, video: fd.get("video") === "on" });
+    showToast(
+      n === null
+        ? "Recording cancelled before validation finished; nothing saved."
+        : `Saved session (${n} frames) to your Downloads. Move it to POC/recordings/ and run <code>npm run replay -- recordings/*.json</code>.`,
+      9000,
+    );
+  };
+  dlg.showModal();
+}
 $("#settings-btn").addEventListener("click", openSettings);
 $("#bench-btn").addEventListener("click", () => startRun(benchIndex));
 $("#results-btn").addEventListener("click", showResults);
@@ -585,6 +748,7 @@ function saveProfileForm() {
   profiles.update(editingId, { name: pf.name.value.trim() || "Me", about: pf.about.value.trim(), people });
   switchProfile(editingId);
   predictor.setPinned(people);
+  predictor.setTopics(pf.about.value);
   applyProfile(profiles.active);
   render();
 }
@@ -658,6 +822,33 @@ $<HTMLSelectElement>("#profile-select").addEventListener("change", (e) => {
   render();
 });
 
+/**
+ * Check the local server for AI suggestions and voice, and show the result on the start screen.
+ * `npm run dev:all` starts the page and the server together, so the first check can beat the
+ * server: while it isn't reachable, check again every 2 s for up to a minute.
+ */
+async function refreshServices(attempt = 0) {
+  await llmAvailable(attempt > 0);
+  const ai = llmStatus();
+  llmOn = ai.on;
+  const llmEl = $("#llm-status");
+  llmEl.className = `llm-status ${ai.on ? "on" : "off"}`;
+  llmEl.textContent = ai.on
+    ? `✨ AI suggestions on${ai.fastModel ? ` (${ai.fastModel})` : ""}`
+    : ai.reason === "no-key"
+      ? "AI suggestions off: the LLM server has no API key. Add ANTHROPIC_API_KEY to POC/.env and restart it."
+      : "AI suggestions off: LLM server not running (npm run dev:all). On-device prediction still works.";
+  const ttsEl = $("#tts-status");
+  ttsEl.className = `llm-status ${ai.voice ? "on" : "off"}`;
+  ttsEl.textContent = ai.voice
+    ? "🗣 Speaking in your voice (ElevenLabs)"
+    : ai.reason === "no-server"
+      ? "Voice: system voice (server not running)."
+      : "Voice: system voice. Set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID in POC/.env for your own voice.";
+  if (ai.on) void llmWarm();
+  if (ai.reason === "no-server" && attempt < 30) setTimeout(() => void refreshServices(attempt + 1), 2000);
+}
+
 // ---------- boot ----------
 async function boot() {
   const words = await fetch("./data/words-10k.txt").then((r) => r.text());
@@ -666,17 +857,7 @@ async function boot() {
   gazeKb.update();
   render();
   void cloudVoiceAvailable(); // check once now so the first Speak doesn't wait on it
-  llmOn = await llmAvailable();
-  const st = llmStatus();
-  const llmEl = $("#llm-status");
-  llmEl.className = `llm-status ${st.on ? "on" : "off"}`;
-  llmEl.textContent =
-    (st.on
-      ? `✨ AI suggestions on${st.fastModel ? ` (${st.fastModel})` : ""}`
-      : st.reason === "no-key"
-        ? "AI suggestions off: the LLM server has no API key. Add ANTHROPIC_API_KEY to POC/.env and restart it."
-        : "AI suggestions off: LLM server not running (npm run dev:all). On-device prediction still works.") +
-    (st.voice ? " · 🗣 Speaking in your voice (ElevenLabs)" : "");
+  void refreshServices();
   try {
     const le = localStorage.getItem("gazetype.lastError.v1");
     if (le) lastError = JSON.parse(le);

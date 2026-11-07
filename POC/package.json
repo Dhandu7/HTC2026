@@ -14,6 +14,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "replay": "tsx scripts/replay.ts",
     "typecheck": "tsc --noEmit",
     "overlay": "concurrently -k -n web,app \"vite\" \"wait-on tcp:5173 && node scripts/electron-dev.mjs\"",
     "overlay:all": "concurrently -k -n web,llm,app \"vite\" \"tsx server/llm.ts\" \"wait-on tcp:5173 && node scripts/electron-dev.mjs\"",
