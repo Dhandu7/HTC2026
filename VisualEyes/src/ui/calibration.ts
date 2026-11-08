@@ -104,7 +104,7 @@ export async function runCalibration(
   };
 
   try {
-    msg.innerHTML = `${message}<br><br><b>Calibration needs ${CAL_POINTS.length} dots + ${VAL_POINTS.length} check dots, about ${fmt(totalDots * (DOT_MS / 1000))}.</b><br>Each dot takes ${DOT_MS / 1000} seconds. Press Esc to cancel.`;
+    msg.innerHTML = `${message}<small>${CAL_POINTS.length} dots, then ${VAL_POINTS.length} check dots: about ${fmt(totalDots * (DOT_MS / 1000))}. Each dot takes ${DOT_MS / 1000} seconds. A helper can press Esc to cancel.</small>`;
     showProgress(0, "Starting");
     await sleep(3500);
     msg.textContent = "";

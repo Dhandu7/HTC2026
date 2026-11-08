@@ -14,6 +14,9 @@ export interface RouterOptions {
   /** Max ms to wait for first audio, per tier. Missing = wait for the provider to settle. */
   startBudgetMs?: Partial<Record<VoiceTier, number>>;
   pace?: () => number;
+  volume?: () => number;
+  /** Audio has started for this text, in this tier (the "generating" wait is over). */
+  onStart?: (tier: VoiceTier, text: string) => void;
   onResult?: (r: SpeakResult, text: string) => void;
   now?: () => number;
 }
@@ -74,6 +77,7 @@ export class VoiceRouter {
     const policy = (this.opts.policy ?? (() => allowAll))();
     const budgets = { ...DEFAULT_START_BUDGET_MS, ...this.opts.startBudgetMs };
     const pace = this.opts.pace?.() ?? 1;
+    const volume = this.opts.volume?.();
     const result = (over: Partial<SpeakResult>): SpeakResult => ({
       tier: null,
       provider: null,
@@ -103,7 +107,7 @@ export class VoiceRouter {
       }
       if (state.cancelled) return result({ cancelled: true, fellBack: !!skipped, reason: skipped });
 
-      const playback = provider.speak(text, { pace });
+      const playback = provider.speak(text, volume === undefined ? { pace } : { pace, volume });
       state.active = playback;
       const budget = budgets[provider.tier];
       try {
@@ -114,6 +118,7 @@ export class VoiceRouter {
           continue;
         }
         const ttfaMs = now() - t0;
+        if (!state.cancelled) this.opts.onStart?.(provider.tier, text);
         await playback.done;
         state.active = null;
         return result({

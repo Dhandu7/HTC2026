@@ -8,6 +8,8 @@ export type VoiceTier = "recording" | "cached" | "cloned" | "system";
 export interface SpeakOptions {
   /** Speaking rate multiplier, 1 = normal. */
   pace?: number;
+  /** Loudness 0..1, 1 = full. */
+  volume?: number;
 }
 
 /** One in-flight utterance on a single provider. */

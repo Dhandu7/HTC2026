@@ -3,83 +3,63 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>GazeType</title>
+    <title>VisualEyes</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet" />
   </head>
-  <body>
-    <div id="app">
-      <header id="topbar">
-        <div id="output" aria-live="polite"></div>
-        <nav id="controls">
-          <button id="profile-btn" type="button">👤</button>
-          <button id="kb-toggle" type="button">Keyboard: GazeType</button>
-          <button id="bench-btn" type="button">⏱ Benchmark</button>
-          <button id="results-btn" type="button">📊 Results</button>
-          <button id="recal" type="button">◎ Calibrate</button>
-          <button id="record-btn" type="button" title="Record a gaze session for offline evaluation">● Record</button>
-          <button id="voice-btn" type="button">🗣 My voice</button>
-          <button id="export-data" type="button" title="Download this session's numbers (no video) as JSON">⬇ Export data</button>
-          <button id="import-cal" type="button" title="Load a head-tracker calibration exported from the other build">📥 Import calibration</button>
-          <input id="import-file" type="file" accept="application/json,.json" hidden />
-          <button id="settings-btn" type="button">⚙</button>
-        </nav>
-      </header>
+  <body class="ve">
+    <!-- The communication screen and the screens beside it. The header stays put; #talk and #screen swap. -->
+    <div id="app" class="screen" hidden>
+      <header id="topbar"></header>
       <div id="target-bar" hidden></div>
-      <main id="board" class="board"></main>
-      <footer id="status"></footer>
+      <div id="talk">
+        <section id="panel" class="panel" aria-label="Your message"></section>
+        <main id="board" class="tray" aria-label="Keyboard"></main>
+      </div>
+      <div id="screen" hidden></div>
+      <footer id="status" hidden></footer>
     </div>
 
-    <section id="home">
-      <div class="home-card">
-        <h1>GazeType</h1>
-        <p>Type with your eyes using any webcam. Prediction-first, large targets, on-device.</p>
-        <div class="home-actions">
-          <button id="start-camera" class="primary" type="button">👁 Eye tracker</button>
-          <button id="start-nose" type="button">🧭 Head tracker</button>
-          <button id="start-mouse" type="button">🖱 Mouse mode (demo / dev)</button>
-        </div>
-        <div class="home-profile">
-          <label>Typing as <select id="profile-select"></select></label>
-          <button id="profile-manage" type="button">Edit profiles</button>
-        </div>
-        <p class="home-account"><span id="account-line"></span> <button id="account-btn" type="button">Sign in</button></p>
-        <p id="llm-status" class="llm-status">Checking AI suggestions…</p>
-        <p id="tts-status" class="llm-status">Checking voice…</p>
-        <p class="home-msg"></p>
-        <p class="fine">Video never leaves this device. Communication aid prototype — not a medical device.</p>
-        <p class="fine" id="shortcut-hint"></p>
-      </div>
-    </section>
+    <!-- Start screen and onboarding (AI preferences, caretaker sign-in). -->
+    <section id="onboard" aria-label="Set up VisualEyes" hidden></section>
 
-    <section id="auth" aria-label="Sign in" hidden></section>
+    <!-- Rest, help alarm and confirmations: on top of everything, and the only gaze targets while open. -->
+    <div id="sheet" hidden></div>
 
     <div id="calibration" hidden></div>
     <div id="cursor" hidden></div>
     <div id="gaze-hint" role="status" hidden></div>
     <div id="head-hint" role="status" hidden></div>
-    <div id="toast" hidden></div>
-    <div id="pill" title="GazeType"><span>👁</span></div>
+    <div id="toast" role="status" aria-live="polite" hidden></div>
+    <div id="pill" title="VisualEyes"><span></span></div>
     <video id="video" playsinline muted></video>
+    <input id="import-file" type="file" accept="application/json,.json" hidden />
 
+    <!-- Caretaker tools: forms that need a mouse and keyboard. Opened from Settings > For caretakers. -->
     <dialog id="settings">
       <form method="dialog">
-        <h2>Settings</h2>
+        <h2>Advanced settings</h2>
+        <p class="fine">For caretakers and testing. Everyday settings are on the Settings and Accessibility screens.</p>
         <label>Selection
           <select name="selectionMode">
-            <option value="dwell">Dwell</option>
-            <option value="blink">Deliberate blink (dwell-free)</option>
+            <option value="dwell">Dwell (look and hold)</option>
+            <option value="blink">Deliberate blink</option>
             <option value="click">Click only</option>
           </select>
         </label>
-        <label>GazeType dwell (ms) <input name="dwellMs" type="number" min="200" max="3000" step="50" /></label>
-        <label>Baseline dwell (ms) <input name="baselineDwellMs" type="number" min="200" max="3000" step="50" /></label>
-        <label><input name="baselinePrediction" type="checkbox" /> Word prediction on baseline keyboard</label>
+        <label>Hold-to-select time (ms) <input name="dwellMs" type="number" min="500" max="3000" step="50" /></label>
+        <label>Baseline keyboard hold time (ms) <input name="baselineDwellMs" type="number" min="200" max="3000" step="50" /></label>
+        <label><input name="baselinePrediction" type="checkbox" /> Word prediction on the baseline keyboard</label>
         <label>Screen diagonal (in) <input name="screenDiagonalIn" type="number" min="7" max="40" step="0.1" /></label>
         <label>Viewing distance (cm, 0 = estimate) <input name="distanceCm" type="number" min="0" max="150" step="1" /></label>
         <label>Camera horizontal FOV (°) <input name="hfovDeg" type="number" min="30" max="120" step="1" /></label>
-        <label><input name="showCursor" type="checkbox" /> Show gaze cursor (sized to measured error)</label>
-        <label><input name="hotCorner" type="checkbox" /> Overlay: open by looking at top-right corner</label>
-        <label><input name="blinkRecenter" type="checkbox" /> Blink 3 times quickly to re-center a drifting pointer</label>
+        <label><input name="showCursor" type="checkbox" /> Show gaze pointer (sized to measured error)</label>
+        <label><input name="hotCorner" type="checkbox" /> Overlay: open by looking at the top-right corner</label>
+        <label><input name="blinkRecenter" type="checkbox" /> Blink 3 times quickly to re-centre a drifting pointer</label>
         <label><input name="voice" type="checkbox" /> Offline voice commands (“gaze type”, “hide keyboard”)</label>
+        <label><input name="showStats" type="checkbox" /> Show tracking details under the keyboard</label>
         <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Save</button></menu>
       </form>
     </dialog>
@@ -107,7 +87,7 @@
     <dialog id="profile-dlg">
       <form method="dialog">
         <h2>Profiles</h2>
-        <p class="fine">Each person gets their own words, phrases and calibration. Everything stays on this device.</p>
+        <p class="fine">Each person gets their own words, phrases and calibration. Everything stays on this device unless you sign in.</p>
         <label>Profile <select id="pf-select"></select></label>
         <label>Name <input id="pf-name" type="text" maxlength="60" /></label>
         <label class="stack">About them: interests, how they talk, what they often need
@@ -137,7 +117,7 @@
       </form>
     </dialog>
 
-    <dialog id="myvoice" aria-label="My voice"></dialog>
+    <dialog id="myvoice" aria-label="Voice service and fine-tuning"></dialog>
 
     <dialog id="results">
       <h2>Benchmark results</h2>

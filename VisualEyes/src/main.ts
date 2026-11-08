@@ -6,10 +6,10 @@ import { estimateDistanceCm, type ErrorStats, type ViewingGeometry } from "./gaz
 import { runCalibration, runRecenter } from "./ui/calibration";
 import { BlinkBurstDetector } from "./input/gestures";
 import { SessionRecorder } from "./metrics/recorder";
-import { BlinkSelector, DwellSelector, TargetTracker, type Rect, type SelectionMode } from "./input/selection";
+import { BlinkSelector, DwellSelector, TargetTracker, type Rect } from "./input/selection";
 import { PredictionEngine } from "./predict/engine";
 import { CORE_WORDS, SEED_PHRASES, BENCHMARK_SENTENCES } from "./predict/vocab";
-import { llmAvailable, llmStatus, llmWarm, setLlmProfile } from "./predict/llm";
+import { llmAvailable, llmPredict, llmStatus, llmWarm, setLlmProfile } from "./predict/llm";
 import { splitSentences } from "./predict/engine";
 import { ProfileManager, pickSamples, type Profile } from "./profile/profiles";
 import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost } from "./ui/keyboards";
@@ -20,13 +20,17 @@ import { HostedVoiceApi } from "./voice/hostedApi";
 import { HostedVoiceController, friendlyReason } from "./voice/hostedController";
 import { HostedVoice, BrowserAudioSink } from "./voice/hostedVoice";
 import { apiConfigFrom, loadVoiceApiSettings, saveVoiceApiSettings, setTokenProvider, usingDevLogin, type VoiceApiSettings } from "./voice/hostedConfig";
-import { AccountApi, PrefsSync, setSkippedSignIn, skippedSignIn, type SyncedPrefs } from "./account/account";
+import { AccountApi, PrefsSync, setSkippedSignIn, type SyncedPrefs } from "./account/account";
 import { Auth0Session, auth0Config, canRedirect, type SignedInUser } from "./account/auth0";
-import { mountAuthScreen } from "./ui/authScreen";
 import { mountMyVoice } from "./ui/myVoice";
 import { startVoiceCommands } from "./input/voice";
 import { recordSession } from "./record/recorder";
 import type { SessionMeta } from "./record/format";
+import { DEFAULTS, lookClasses, type Settings } from "./settings";
+import { bars, brand, esc, g, honeycomb, logo } from "./ui/dom";
+import { makeScreens, type ScreenName, type Screen } from "./ui/screens";
+import { makeVoiceScreens } from "./ui/voiceScreens";
+import { Onboarding, emptyDraft, type Draft } from "./ui/onboarding";
 
 // ---------- Electron bridge (absent in the browser) ----------
 interface Bridge {
@@ -40,33 +44,6 @@ const bridge = (window as unknown as { gazetype?: Bridge }).gazetype;
 const isOverlay = !!bridge;
 
 // ---------- settings ----------
-interface Settings {
-  selectionMode: SelectionMode;
-  dwellMs: number;
-  baselineDwellMs: number;
-  baselinePrediction: boolean;
-  screenDiagonalIn: number;
-  distanceCm: number; // 0 = estimate from iris size
-  hfovDeg: number;
-  showCursor: boolean;
-  hotCorner: boolean;
-  voice: boolean;
-  /** Three quick blinks re-center a drifting pointer. */
-  blinkRecenter: boolean;
-}
-const DEFAULTS: Settings = {
-  selectionMode: "dwell",
-  dwellMs: 2000,
-  baselineDwellMs: 2000,
-  baselinePrediction: false,
-  screenDiagonalIn: 14,
-  distanceCm: 0,
-  hfovDeg: 60,
-  showCursor: true,
-  hotCorner: true,
-  blinkRecenter: true,
-  voice: false,
-};
 const load = <T>(k: string, d: T): T => {
   try {
     const v = localStorage.getItem(k);
@@ -81,20 +58,36 @@ let prefsChanged: () => void = () => {};
 const storeSettings = () => localStorage.setItem("gazetype.settings.v1", JSON.stringify(settings));
 const saveSettings = () => {
   storeSettings();
+  applyLook();
+  sink.setVolume(settings.volume / 100);
+  baseKb.withPrediction = settings.baselinePrediction;
   prefsChanged();
+  render();
 };
 
 // ---------- DOM ----------
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
+const appRoot = $("#app");
+const topbar = $("#topbar");
+const talk = $("#talk");
+const panel = $("#panel");
 const board = $("#board");
-const output = $("#output");
+const screenRoot = $("#screen");
 const statusEl = $("#status");
 const cursor = $("#cursor");
 const calRoot = $("#calibration");
-const home = $("#home");
+const onboardRoot = $("#onboard");
+const sheetRoot = $("#sheet");
 const targetBar = $("#target-bar");
 const toast = $("#toast");
 const pill = $("#pill");
+pill.querySelector("span")!.innerHTML = logo();
+
+/** Theme and accessibility classes on <body>, keeping the overlay's own classes. */
+function applyLook() {
+  const keep = ["overlay", "collapsed"].filter((c) => document.body.classList.contains(c));
+  document.body.className = [...lookClasses(settings), ...keep].join(" ");
+}
 if (isOverlay) {
   document.documentElement.classList.add("overlay");
   document.body.classList.add("overlay");
@@ -113,9 +106,11 @@ const rec = new SessionRecorder();
 const EYE_FEATURES = ["irisX", "irisY", "lookH", "lookV", "yaw", "pitch", "openness"];
 const HEAD_FEATURES = ["yaw", "pitch", "noseX", "noseY", "noseRelX", "noseRelY", "roll", "faceH", "eyeMidX", "eyeMidY"];
 rec.featureNames = EYE_FEATURES;
-const tracker = new FaceTracker($("#video"));
+const video = $<HTMLVideoElement>("#video");
+const tracker = new FaceTracker(video);
 // Nose pointer: the same keyboard, fed head features instead of eye features. Eye features are ignored in this mode.
 let nosePointer = false;
+let cameraStarted = false;
 tracker.onFrame = (f) => {
   if (!f) return gaze.handleFrame(f);
   const v = f.vector;
@@ -136,6 +131,8 @@ const host: KeyboardHost = {
   profiles: () => profiles.list(),
   activeProfileId: () => profiles.active.id,
   notice: (m) => showToast(m, 3500),
+  aiEnabled: () => settings.ai,
+  benchmarking: () => !!benchmark,
 };
 const gazeKb = new GazeTypeKeyboard(predictor, host);
 const baseKb = new BaselineKeyboard(predictor, host, settings.baselinePrediction);
@@ -159,44 +156,417 @@ function geometry(): ViewingGeometry {
   };
 }
 
+// ---------- speech: the voice router, plus the generating / playing / paused states the panel shows ----------
+// Speaking goes through the voice router: the user's own hosted voice (ElevenLabs, via our service, one voice per
+// user from "My voice") when they have one and it is active, otherwise the system voice. A slow, failing, paused or
+// missing voice never leaves the user silent. See docs/VOICE_ENGINE_FLOW.md and docs/AWS_VOICE_HANDOFF.md.
+type SpPhase = "idle" | "generating" | "playing" | "paused";
+const sp = { phase: "idle" as SpPhase, text: "", start: 0, dur: 0, el: 0, seq: 0 };
+const sink = new BrowserAudioSink();
+sink.setVolume(settings.volume / 100);
+let voiceApiSettings: VoiceApiSettings = loadVoiceApiSettings(localStorage);
+const voiceApi = new HostedVoiceApi(apiConfigFrom(() => voiceApiSettings));
+const voiceCtl = new HostedVoiceController(voiceApi, async (text) => (await voice.speak(text).done));
+const voice = new VoiceRouter({
+  providers: [new HostedVoice(voiceApi, sink, () => voiceCtl.usable()), new SystemVoice()],
+  // The service is the source of truth for consent: the cloned tier is allowed only while the voice is active there.
+  policy: () => ({ allows: (tier) => tier === "system" || (tier === "cloned" && voiceCtl.usable()) }),
+  // Over the network the first sound takes longer than a local clip; past this the system voice speaks instead.
+  startBudgetMs: { cloned: 2500 },
+  pace: () => settings.speechRate,
+  volume: () => settings.volume / 100,
+  onStart: (_tier, text) => {
+    if (sp.phase !== "generating" || sp.text !== text) return;
+    sp.phase = "playing";
+    sp.start = performance.now();
+    sp.dur = Math.max(1500, (text.trim().split(/\s+/).length * 430 + 600) / settings.speechRate);
+    renderPanel();
+  },
+  onResult: () => updateStatus(),
+});
+const myVoice = mountMyVoice({
+  dialog: $<HTMLDialogElement>("#myvoice"),
+  controller: voiceCtl,
+  getApiSettings: () => voiceApiSettings,
+  saveApiSettings: (s) => {
+    voiceApiSettings = s;
+    saveVoiceApiSettings(localStorage, s);
+  },
+  usingDevLogin,
+});
+
+const voiceName = () => (voiceCtl.usable() ? "My voice" : "Standard voice");
+
+/** Speak through the router and show it on the panel. `record` adds it to Recent. */
+function say(text: string, record = true) {
+  const t = text.trim();
+  if (!t) return;
+  if (containsSlur(t)) return void showToast(SLUR_NOTICE, 3500); // also covers voice commands
+  if (record) pushHistory(t);
+  const seq = ++sp.seq;
+  Object.assign(sp, { phase: "generating", text: t, start: performance.now(), el: 0 });
+  sink.resume();
+  if (typeof speechSynthesis !== "undefined") speechSynthesis.resume();
+  const h = voice.speak(t);
+  void h.done.then(() => {
+    if (sp.seq !== seq) return;
+    sp.phase = "idle";
+    renderPanel();
+  });
+  renderPanel();
+}
+
+function pauseSpeech() {
+  if (sp.phase === "playing") {
+    sp.phase = "paused";
+    sp.el = performance.now() - sp.start;
+    if (typeof speechSynthesis !== "undefined") speechSynthesis.pause();
+    sink.pause();
+  } else if (sp.phase === "paused") {
+    sp.phase = "playing";
+    sp.start = performance.now() - sp.el;
+    if (typeof speechSynthesis !== "undefined") speechSynthesis.resume();
+    sink.resume();
+  }
+  renderPanel();
+}
+
+function stopSpeech() {
+  sp.seq++;
+  voice.cancel();
+  if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
+  sink.resume();
+  sp.phase = "idle";
+  renderPanel();
+}
+
+// The progress bar while speaking.
+setInterval(() => {
+  if (sp.phase !== "playing") return;
+  const b = panel.querySelector<HTMLElement>(".spbar > i");
+  if (b) b.style.width = `${Math.min(100, ((performance.now() - sp.start) / sp.dur) * 100)}%`;
+}, 100);
+
+/** Add a sentence end, so speech sounds finished: a question mark for questions, a full stop otherwise. */
+function punctuate(text: string): string {
+  const t = text.replace(/\s+$/, "");
+  if (!t || /[.!?]$/.test(t)) return t;
+  const first = (t.split(/[.!?]\s+/).pop() ?? "").trim().split(/\s+/)[0].toLowerCase();
+  const Q = ["who", "what", "when", "where", "why", "how", "can", "could", "would", "will", "do", "does", "did", "is", "are", "am", "should", "may", "shall", "have", "has", "was", "were", "which"];
+  return t + (Q.includes(first) ? "?" : ".");
+}
+
+// ---------- recent messages (per profile, this computer only) ----------
+const HIST_KEY = "visualeyes.history.v1";
+let history: string[] = [];
+const loadHistory = () => {
+  try {
+    history = JSON.parse(localStorage.getItem(profiles.keyFor(profiles.active.id, HIST_KEY)) ?? "[]");
+  } catch {
+    history = [];
+  }
+};
+function pushHistory(t: string) {
+  history = [t, ...history.filter((h) => h !== t)].slice(0, 20);
+  localStorage.setItem(profiles.keyFor(profiles.active.id, HIST_KEY), JSON.stringify(history));
+}
+loadHistory();
+
+// ---------- screens ----------
+let screenName: ScreenName | null = null;
+const screens = makeScreens({
+  settings,
+  saveSettings,
+  toast: showToast,
+  open: (n) => openScreen(n),
+  insertPhrase: (t) => {
+    kb.appendText(t);
+    render();
+  },
+  sayAgain: (t) => say(t),
+  history: () => history,
+  frequent: (n) => predictor.topPhrases(n),
+  recalibrate: () => void calibrate(),
+  aiPrefs: () => onboard.edit(draftFor(profiles.active)),
+  account: () => ({
+    line: account ? `Signed in as ${account.name || account.email || "a caretaker"}.` : "Not signed in: settings stay on this computer.",
+    signedIn: !!account,
+    available: !!auth,
+  }),
+  signIn: () => void auth?.signIn(false),
+  signOut: () => void signOut(),
+  tools: () => caretakerTools(),
+  aiStatus: () => (llmOn ? "The AI is connected." : "The AI server isn't running, so only word prediction works."),
+});
+const voiceScreens = makeVoiceScreens({
+  controller: voiceCtl,
+  toast: showToast,
+  open: (n) => openScreen(n),
+  confirm: (title, body, yes, onYes) => showSheet({ kind: "confirm", title, body, yes, onYes }),
+  rerender: () => render(),
+  speakSystem: (t) => void new SystemVoice().speak(t, { pace: settings.speechRate, volume: settings.volume / 100 }),
+  advanced: () => myVoice.open(),
+});
+const allScreens: Record<ScreenName, Screen> = { ...screens, voice: voiceScreens.voice, voiceSetup: voiceScreens.voiceSetup };
+
+function openScreen(n: ScreenName | null) {
+  screenName = n;
+  talk.hidden = !!n;
+  screenRoot.hidden = !n;
+  if (n === "voice" || n === "voiceSetup") void voiceCtl.refresh();
+  render();
+}
+
+// Caretaker buttons on the Settings and voice screens (ordinary clicks, not gaze targets).
+function caretakerTools() {
+  return [
+    { label: "Advanced settings", run: openSettings },
+    { label: "Profiles", run: openProfiles },
+    { label: "Voice service and fine-tuning", run: () => myVoice.open() },
+    { label: "Run setup again", run: () => onboard.begin() },
+    { label: `Keyboard: ${kb === gazeKb ? "GazeType" : "Baseline QWERTY"}`, run: toggleKeyboard },
+    { label: "Start a benchmark", run: () => (openScreen(null), startRun(benchIndex)) },
+    { label: "Benchmark results", run: showResults },
+    { label: "Record a session", run: openRecord },
+    { label: "Export data", run: exportData },
+    { label: "Import calibration", run: importCalibration },
+  ];
+}
+screenRoot.addEventListener("click", (e) => {
+  const t = (e.target as HTMLElement).closest<HTMLElement>("[data-tool],[data-act]");
+  if (!t) return;
+  if (t.dataset.act === "advanced") return myVoice.open();
+  if (t.dataset.tool === "account") {
+    if (account) return void signOut();
+    if (!auth) return showToast(esc(onboardAuthWhy()), 7000);
+    return void auth.signIn(false).catch((err) => showToast(`Couldn't open sign-in: ${esc((err as Error).message)}`, 6000));
+  }
+  caretakerTools()[Number(t.dataset.tool)]?.run();
+});
+
+// ---------- sheets: rest, help alarm, confirm ----------
+type Sheet = { kind: "rest" } | { kind: "alarm" } | { kind: "confirm"; title: string; body: string; yes: string; onYes: () => void };
+let sheet: Sheet | null = null;
+let alarm: { ac: AudioContext | null; timer: number } | null = null;
+
+function showSheet(s: Sheet) {
+  sheet = s;
+  sheetRoot.className = s.kind === "rest" ? "rest" : s.kind === "alarm" ? "alarm" : "";
+  sheetRoot.hidden = false;
+  if (s.kind === "alarm") startAlarm();
+  renderSheet();
+}
+
+function hideSheet() {
+  if (sheet?.kind === "alarm") stopAlarm();
+  sheet = null;
+  sheetRoot.hidden = true;
+  sheetRoot.innerHTML = "";
+  dwell.reset();
+  targetTracker.reset();
+}
+
+function renderSheet() {
+  if (!sheet) return;
+  if (sheet.kind === "rest") {
+    sheetRoot.innerHTML = `<div class="centre">${logo().replace("<svg", '<svg style="width:7.5rem;height:7.5rem"')}
+      <h1 class="h1" style="font-size:3.5rem">Resting</h1>
+      <p class="sub" style="font-size:1.75rem">Eye tracking is paused. Nothing will be selected by accident.</p>
+      <div class="row" style="gap:.625rem">${g("h:wake", "I'm back", { face: "btn-main", faceStyle: "width:32.5rem;min-height:11.875rem;font-size:3.375rem" })}${g("h:help", "Help", { face: "help", faceStyle: "width:16.25rem;min-height:11.875rem;font-size:3rem" })}</div>
+      <p class="sub" style="font-size:1.25rem">Help works even while resting.</p></div>`;
+  } else if (sheet.kind === "alarm") {
+    sheetRoot.innerHTML = `<div class="centre"><h1 class="h1" style="font-size:5rem;color:#FFFFFF">Calling for help</h1>
+      <p style="margin:0;font-size:2rem;font-weight:800;color:#FFFFFF">An alarm is sounding so someone comes to you.</p>
+      ${g("h:stop", "I'm OK. Stop the alarm", { face: "btn", faceStyle: "width:37.5rem;min-height:10rem;font-size:2.625rem;font-weight:900" })}</div>`;
+  } else {
+    sheetRoot.innerHTML = `<div class="sheet" style="width:51.25rem;text-align:center"><h2 style="margin:0 0 .625rem;font-size:2.5rem;font-weight:900">${esc(sheet.title)}</h2>
+      <p class="sub" style="font-size:1.5625rem;margin:0 0 1.5rem">${esc(sheet.body)}</p>
+      <div style="display:flex;justify-content:center">${g("h:no", "Keep it", { face: "btn xl", faceStyle: "width:18.75rem" })}${g("h:yes", esc(sheet.yes), { face: "btn xl", faceStyle: "width:18.75rem;background:#A8321A;color:#fff" })}</div></div>`;
+  }
+}
+
+function sheetSelect(id: string) {
+  const s = sheet;
+  if (!s) return;
+  if (id === "h:wake") {
+    hideSheet();
+    showToast("Welcome back.", 2000);
+  } else if (id === "h:help") showSheet({ kind: "alarm" });
+  else if (id === "h:stop") {
+    hideSheet();
+    showToast("Alarm stopped.", 2500);
+  } else if (id === "h:no") hideSheet();
+  else if (id === "h:yes" && s.kind === "confirm") {
+    hideSheet();
+    s.onYes();
+  }
+}
+
+function startAlarm() {
+  say("I need help.", false);
+  let ac: AudioContext | null = null;
+  try {
+    ac = new AudioContext();
+  } catch {
+    /* the screen still flashes */
+  }
+  const beep = () => {
+    if (!ac) return;
+    const o = ac.createOscillator();
+    const gn = ac.createGain();
+    o.type = "square";
+    o.frequency.value = 880;
+    gn.gain.value = 0.08;
+    o.connect(gn);
+    gn.connect(ac.destination);
+    o.start();
+    o.stop(ac.currentTime + 0.25);
+  };
+  beep();
+  alarm = { ac, timer: window.setInterval(beep, 600) };
+}
+
+function stopAlarm() {
+  if (!alarm) return;
+  clearInterval(alarm.timer);
+  void alarm.ac?.close().catch(() => {});
+  alarm = null;
+}
+
 // ---------- rendering ----------
 let rects: Rect[] = [];
+let readTargets = new Set<string>();
 let rectsDirty = true;
+let measuredRoot: HTMLElement | null = null;
+
+function renderHeader() {
+  const on = (n: ScreenName) => screenName === n;
+  topbar.innerHTML = `${brand()}
+    <div class="chip" id="track-chip"><i class="ve-dot"></i><span></span></div>
+    ${g("u:voice", `<i class="ve-dot${voiceCtl.usable() ? "" : " off"}" style="${voiceCtl.usable() ? "background:var(--brandText)" : ""}"></i><span>Voice: ${voiceName()}</span>`, { face: "nav", faceStyle: "gap:.625rem", on: on("voice") || on("voiceSetup") })}
+    <div class="spacer"></div>
+    ${g("u:phrases", "Phrases", { face: "nav", on: on("phrases") })}
+    ${g("u:access", "Accessibility", { face: "nav", on: on("access") })}
+    ${g("u:settings", "Settings", { face: "nav", on: on("settings") || on("theme") })}
+    ${g("u:rest", "Rest", { face: "nav" })}
+    ${g("u:help", "Help", { face: "nav help" })}`;
+  updateTrackChip();
+}
+
+function renderPanel() {
+  const text = kb.text();
+  const empty = !text.trim() && !(kb === gazeKb && gazeKb.slots.length);
+  let line = "";
+  if (sp.phase === "idle")
+    line = `<span class="eyebrow">Your message</span><span class="hint">${nosePointer ? "Point at a key and hold still" : "Look at a key and hold your gaze"} for ${(settings.dwellMs / 1000).toFixed(1)} s to select it.</span>`;
+  else if (sp.phase === "generating") line = `<div class="hcw">${honeycomb()}</div><span class="lbl" style="font-size:1.375rem">Getting your voice ready…</span>`;
+  else
+    line = `${bars(sp.phase === "paused")}<span class="lbl" style="font-size:1.375rem">${sp.phase === "paused" ? "Paused" : `Speaking in ${voiceName()}`}</span>
+      <div class="bar spbar" style="width:18.75rem"><i style="width:${Math.min(100, ((sp.phase === "paused" ? sp.el : performance.now() - sp.start) / (sp.dur || 1)) * 100)}%"></i></div>`;
+  const speaking = sp.phase === "playing" || sp.phase === "paused";
+  panel.innerHTML = `
+    <div class="msgcol">
+      <div class="spline">${line}</div>
+      <div id="output" aria-live="polite"><div class="msg">${kb.displayHtml()}</div></div>
+      <div class="acts">
+        ${g("u:undo", "Undo", { off: !kb.canUndo(), style: "width:9.375rem" })}
+        ${g("u:delword", "Delete word", { off: empty, style: "width:12.5rem" })}
+        ${g("u:clear", "Clear", { off: empty, style: "width:9.375rem" })}
+        ${g("u:again", "Say again", { off: !history.length, style: "width:11.875rem" })}
+      </div>
+    </div>
+    <div class="yn">${g("u:yes", "Yes", { style: "flex:1" })}${g("u:no", "No", { style: "flex:1" })}</div>
+    <div class="spk">
+      ${g("u:speak", "Speak", { face: "btn-main", style: "flex:1" })}
+      <div class="row2">${g("u:pause", sp.phase === "paused" ? "Resume" : "Pause", { face: "btn lg", off: !speaking })}${g("u:stop", "Stop", { face: "btn lg", off: sp.phase === "idle" })}</div>
+    </div>`;
+  rectsDirty = true;
+}
+
+function renderScreen() {
+  if (!screenName) return;
+  const s = allScreens[screenName];
+  const back = s.back === "settings" ? g("u:backset", "Back to settings", { face: "btn xl" }) : g("u:back", "Back to message", { face: "btn xl" });
+  screenRoot.innerHTML = `<div class="screenhead">${back}<div><h1 class="h1">${esc(s.title)}</h1><p class="sub">${esc(s.sub)}</p></div></div>${s.render()}`;
+}
+
 function render() {
-  kb.render(board);
-  output.innerHTML = kb.displayHtml();
+  if (screenName) renderScreen();
+  else {
+    kb.render(board);
+    renderPanel();
+  }
+  renderHeader();
+  statusEl.hidden = !settings.showStats;
   rectsDirty = true;
   document.body.dataset.kb = kb.name;
-  $("#kb-toggle").textContent = kb === gazeKb ? "Keyboard: GazeType" : "Keyboard: Baseline QWERTY";
 }
-function measure() {
-  if (!rectsDirty) return;
-  rects = [...board.querySelectorAll<HTMLElement>("[data-target]")].map((el) => {
-    const r = el.getBoundingClientRect();
-    return { id: el.dataset.target!, left: r.left, top: r.top, right: r.right, bottom: r.bottom };
-  });
-  rectsDirty = false;
-}
+
+// Any change to the page can move targets: measure again before the next gaze frame.
+new MutationObserver(() => (rectsDirty = true)).observe(document.body, { childList: true, subtree: true });
 window.addEventListener("resize", () => (rectsDirty = true));
 
+/** Which layer the gaze talks to: sheets first, then onboarding, then the app. None while calibrating. */
+function activeLayer(): { id: "app" | "onboard" | "sheet"; root: HTMLElement } | null {
+  if (!calRoot.hidden) return null;
+  if (!sheetRoot.hidden) return { id: "sheet", root: sheetRoot };
+  if (!onboardRoot.hidden) return { id: "onboard", root: onboardRoot };
+  if (expanded && !appRoot.hidden) return { id: "app", root: appRoot };
+  return null;
+}
+
+function measure(root: HTMLElement) {
+  if (!rectsDirty && root === measuredRoot) return;
+  readTargets = new Set();
+  rects = [];
+  for (const el of root.querySelectorAll<HTMLElement>("[data-target]:not(.is-off)")) {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) continue;
+    rects.push({ id: el.dataset.target!, left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+    if (el.hasAttribute("data-read")) readTargets.add(el.dataset.target!);
+  }
+  measuredRoot = root;
+  rectsDirty = false;
+}
+
+function updateTrackChip() {
+  const chip = topbar.querySelector("#track-chip");
+  if (!chip) return;
+  const [txt, cls] =
+    gaze.source !== "camera" ? ["Mouse mode", "off"] : !gaze.faceVisible ? ["Can't see your face", "bad"] : !gaze.calibrated ? ["Not calibrated", "bad"] : ["Tracking good", ""];
+  chip.innerHTML = `<i class="ve-dot ${cls}"></i><span>${txt}</span>`;
+}
+
 function updateStatus() {
-  const g = geometry();
+  updateTrackChip();
+  if (!settings.showStats) return;
+  const g2 = geometry();
   const parts = [
-    gaze.source === "camera" ? (gaze.faceVisible ? `<b class="ok">● face</b>` : `<b class="bad">● no face</b>`) : `<b>🖱 mouse</b>`,
+    gaze.source === "camera" ? (gaze.faceVisible ? `<b class="ok">● face</b>` : `<b class="bad">● no face</b>`) : `<b>mouse</b>`,
     gaze.source === "camera" ? `${tracker.fps} fps · ${gaze.inferMs.toFixed(0)} ms` : "",
     lastError ? `error ${lastError.meanDeg.toFixed(1)}° (±${lastError.precisionDeg.toFixed(1)}°)` : gaze.source === "camera" ? "not calibrated" : "",
-    gaze.source === "camera" ? `${g.distanceCm.toFixed(0)} cm${settings.distanceCm ? "" : " est."}` : "",
+    gaze.source === "camera" ? `${g2.distanceCm.toFixed(0)} cm${settings.distanceCm ? "" : " est."}` : "",
     gaze.implicitCount ? `+${gaze.implicitCount} auto-cal` : "",
     `${settings.selectionMode}${settings.selectionMode === "dwell" ? ` ${kb === gazeKb ? settings.dwellMs : settings.baselineDwellMs} ms` : ""}`,
     settings.selectionMode === "blink" ? `blinks ✓${blink.accepted} ✗${blink.rejectedShort + blink.rejectedLong}` : "",
-    `👤 ${esc(profiles.active.name)}`,
+    esc(profiles.active.name),
     kb === gazeKb ? `predict ${gazeKb.lastSuggestMs.toFixed(1)} ms` : "",
-    llmOn ? "✨ LLM on" : "on-device only",
+    llmOn && settings.ai ? "AI on" : "on-device only",
     voiceStatusText(),
   ];
   statusEl.innerHTML = parts.filter(Boolean).join(" · ");
 }
 setInterval(updateStatus, 500);
+
+function voiceStatusText(): string {
+  const st = voiceCtl.status();
+  const last = voice.last;
+  if (st === "active" && !voiceCtl.usable()) return "my voice needs verifying";
+  if (st === "active") {
+    return last && last.tier === "system" && last.fellBack ? `system voice: ${friendlyReason(last.reason) || "my voice unavailable"}` : last?.tier === "cloned" ? `my voice · ${last.ttfaMs} ms` : "my voice ready";
+  }
+  return st === "paused" ? "my voice paused" : "";
+}
 
 // ---------- head position ----------
 // Webcam gaze is calibrated for one head position. If the head has been somewhere else for
@@ -205,7 +575,7 @@ const headHint = $("#head-hint");
 let headBadSince: number | null = null;
 let headOkSince: number | null = null;
 setInterval(() => {
-  const active = expanded && home.hidden && calRoot.hidden;
+  const active = expanded && onboardRoot.hidden && sheetRoot.hidden && calRoot.hidden;
   const hc = active ? gaze.headCheck() : null;
   const now = performance.now();
   if (!hc || hc.ok) {
@@ -222,7 +592,7 @@ setInterval(() => {
   }
 }, 250);
 
-// ---------- selection ----------
+// ---------- selection: the one dwell mechanism for every target on every screen ----------
 let pendingImplicit: { timer: number } | null = null;
 
 /**
@@ -243,8 +613,10 @@ function acceptSentenceSamples() {
   sentenceSamples = [];
 }
 
+/** A keyboard key was chosen (ids without a prefix). */
 function applySelection(id: string, t: number) {
   const el = board.querySelector<HTMLElement>(`[data-target="${CSS.escape(id)}"]`);
+  const r = el?.getBoundingClientRect();
   const kind = kb.select(id);
   rec.event("select", { id, kind });
   if (kind === "delete" && pendingImplicit) {
@@ -256,8 +628,7 @@ function applySelection(id: string, t: number) {
   session.record(t, kind);
   // Implicit recalibration: if this selection isn't undone within 2 s, treat the
   // fixation before it as a labelled sample at the target's centre.
-  if (gaze.source === "camera" && el && kind !== "delete") {
-    const r = el.getBoundingClientRect();
+  if (gaze.source === "camera" && r && kind !== "delete") {
     const win = settings.selectionMode === "blink" ? [t - 900, t - 400] : [t - 450, t - 50];
     const feats = gaze.meanFeatures(win[0], win[1]);
     if (feats) {
@@ -270,71 +641,104 @@ function applySelection(id: string, t: number) {
       };
     }
   }
-  el?.classList.add("fired");
   render();
   checkBenchmark(t);
 }
 
-board.addEventListener("click", (e) => {
+/** Show the activated state on whatever now carries this id (the screen may have re-rendered). */
+function flash(root: HTMLElement, id: string) {
+  const el = root.querySelector<HTMLElement>(`[data-target="${CSS.escape(id)}"]`);
+  if (!el) return;
+  el.classList.remove("is-focus", "is-dwell");
+  el.classList.add("is-active");
+  setTimeout(() => el.classList.remove("is-active"), 450);
+}
+
+function dispatch(layer: "app" | "onboard" | "sheet", id: string, t: number) {
+  if (layer === "sheet") sheetSelect(id);
+  else if (layer === "onboard") onboard.select(id);
+  else if (id.startsWith("u:")) uiAction(id.slice(2));
+  else if (id.startsWith("s:") && screenName) {
+    allScreens[screenName].select(id);
+    if (screenName) render();
+  } else applySelection(id, t);
+  const after = activeLayer();
+  if (after) flash(after.root, id);
+}
+
+document.addEventListener("click", (e) => {
   const el = (e.target as HTMLElement).closest<HTMLElement>("[data-target]");
-  if (el) applySelection(el.dataset.target!, performance.now());
+  if (!el || el.classList.contains("is-off")) return;
+  const layer = activeLayer();
+  if (!layer || !layer.root.contains(el)) return;
+  dispatch(layer.id, el.dataset.target!, performance.now());
 });
 
 let lastHover: HTMLElement | null = null;
 let hotCornerSince: number | null = null;
 
-function onGaze(g: GazePoint) {
-  if (g.source === "camera" && gaze.dbg.frame) {
+function clearHover() {
+  if (!lastHover) return;
+  lastHover.classList.remove("is-focus", "is-dwell");
+  lastHover.style.removeProperty("--p");
+  lastHover = null;
+}
+
+function onGaze(g2: GazePoint) {
+  if (g2.source === "camera" && gaze.dbg.frame) {
     rec.frame(
       {
         phase: calRoot.hidden ? 0 : 1,
         rawX: gaze.dbg.raw?.x ?? NaN, rawY: gaze.dbg.raw?.y ?? NaN,
-        curX: g.x, curY: g.y, valid: g.valid ? 1 : 0,
-        blinkL: g.blinkL, blinkR: g.blinkR,
+        curX: g2.x, curY: g2.y, valid: g2.valid ? 1 : 0,
+        blinkL: g2.blinkL, blinkR: g2.blinkR,
       },
       gaze.dbg.frame.vector,
     );
   }
   if (!expanded) {
-    hotCorner(g);
+    hotCorner(g2);
     return;
   }
-  const show = settings.showCursor && g.valid && Number.isFinite(g.x);
+  const show = settings.showCursor && g2.source === "camera" && g2.valid && Number.isFinite(g2.x);
   cursor.hidden = !show;
   if (show) {
-    const r = Math.max(14, lastError ? Math.min(lastError.meanPx, 200) : 14);
-    cursor.style.transform = `translate(${g.x - r}px, ${g.y - r}px)`;
+    // Hints at accuracy without covering what the user is trying to read.
+    const r = Math.max(14, lastError ? Math.min(lastError.meanPx * 0.5, 44) : 14);
+    cursor.style.transform = `translate(${g2.x - r}px, ${g2.y - r}px)`;
     cursor.style.width = cursor.style.height = `${2 * r}px`;
   }
-  cursor.classList.toggle("lost", !!g.offscreen);
-  if (!calRoot.hidden || !home.hidden) return;
-  updateLostHint(g);
-  measure();
+  cursor.classList.toggle("lost", !!g2.offscreen);
+  const layer = activeLayer();
+  if (!layer) {
+    hideLostHint();
+    return clearHover();
+  }
+  if (layer.id === "app") updateLostHint(g2);
+  else hideLostHint();
+  measure(layer.root);
   // An off-screen estimate is pinned to the edge; selecting from there would hit an edge key by accident.
-  const target = g.valid && !g.offscreen ? targetTracker.update(g.t, rects, g.x, g.y) : null;
+  const target = g2.valid && !g2.offscreen ? targetTracker.update(g2.t, rects, g2.x, g2.y) : null;
   let out;
-  if (settings.selectionMode === "blink" && g.source === "camera") out = blink.update(g.t, target, g.blinkL, g.blinkR);
+  if (settings.selectionMode === "blink" && g2.source === "camera") out = blink.update(g2.t, target, g2.blinkL, g2.blinkR);
   else if (settings.selectionMode === "click") out = { selected: null, progress: 0, target };
   else {
-    dwell.dwellMs = kb === gazeKb ? settings.dwellMs : settings.baselineDwellMs;
-    out = dwell.update(g.t, target);
+    const keyboardKey = layer.id === "app" && !!target && !/^[us]:/.test(target);
+    dwell.dwellMs = (keyboardKey && kb === baseKb ? settings.baselineDwellMs : settings.dwellMs) + (target && readTargets.has(target) ? settings.readExtraMs : 0);
+    out = dwell.update(g2.t, target);
   }
-  const el = out.target ? board.querySelector<HTMLElement>(`[data-target="${CSS.escape(out.target)}"]`) : null;
-  if (lastHover && lastHover !== el) {
-    lastHover.classList.remove("hover");
-    lastHover.style.removeProperty("--p");
-    lastHover.removeAttribute("data-count");
-  }
-  if (el) {
-    el.classList.add("hover");
+  const el = out.target ? layer.root.querySelector<HTMLElement>(`[data-target="${CSS.escape(out.target)}"]`) : null;
+  if (lastHover && lastHover !== el) clearHover();
+  if (el && !el.classList.contains("is-active")) {
+    el.classList.toggle("is-dwell", out.progress > 0.02);
+    el.classList.toggle("is-focus", out.progress <= 0.02);
     el.style.setProperty("--p", String(out.progress));
-    // Countdown in seconds while dwelling (2 -> 1).
-    if (settings.selectionMode === "dwell" && out.progress > 0 && out.progress < 1)
-      el.dataset.count = String(Math.ceil((1 - out.progress) * (dwell.dwellMs / 1000)));
-    else el.removeAttribute("data-count");
+    lastHover = el;
   }
-  lastHover = el;
-  if (out.selected) applySelection(out.selected, g.t);
+  if (out.selected) {
+    clearHover();
+    dispatch(layer.id, out.selected, g2.t);
+  }
 }
 gaze.onGaze(onGaze);
 
@@ -344,37 +748,42 @@ const blinkBurst = new BlinkBurstDetector();
 let lostSince: number | null = null;
 let recentering = false;
 
+function hideLostHint() {
+  lostSince = null;
+  gazeHint.hidden = true;
+}
+
 /** After the pointer has been off the screen for 2 s, say how to get it back. */
-function updateLostHint(g: GazePoint) {
-  if (g.source !== "camera" || !g.offscreen) {
+function updateLostHint(g2: GazePoint) {
+  if (g2.source !== "camera" || !g2.offscreen) {
     lostSince = null;
     gazeHint.hidden = true;
     return;
   }
-  lostSince ??= g.t;
-  if (g.t - lostSince < 2000 || !gazeHint.hidden) return;
+  lostSince ??= g2.t;
+  if (g2.t - lostSince < 2000 || !gazeHint.hidden) return;
   gazeHint.textContent = settings.blinkRecenter
-    ? "Pointer lost. Blink 3 times quickly to re-center."
-    : "Pointer lost. Press R to re-center, or turn on blink re-centering in Settings.";
+    ? "Pointer lost. Blink 3 times quickly to re-centre."
+    : "Pointer lost. Press R to re-centre, or turn on blink re-centring in Accessibility.";
   gazeHint.hidden = false;
 }
 
 // Three quick blinks re-center the pointer, wherever it has drifted to.
 gaze.onRaw((f) => {
   if (!f || !settings.blinkRecenter || gaze.source !== "camera" || !gaze.calibrated) return;
-  if (!expanded || recentering || !calRoot.hidden || !home.hidden) return;
+  if (!expanded || recentering || !calRoot.hidden || !onboardRoot.hidden || sheet) return;
   if (blinkBurst.update(f.t, f.blinkL, f.blinkR)) void recenter();
 });
 
 // A caregiver can also press R.
 window.addEventListener("keydown", (e) => {
   const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement;
-  if ((e.key === "r" || e.key === "R") && !typing && !e.ctrlKey && !e.metaKey && !e.altKey && !document.querySelector("dialog[open]")) void recenter();
+  if ((e.key === "r" || e.key === "R") && !typing && !e.ctrlKey && !e.metaKey && !e.altKey && !document.querySelector("dialog[open]") && onboardRoot.hidden) void recenter();
 });
 
 async function recenter() {
   if (gaze.source !== "camera" || !gaze.calibrated) {
-    showToast("Re-centering needs the camera and a calibration first.");
+    showToast("Re-centring needs the camera and a calibration first.");
     return;
   }
   if (recentering || !calRoot.hidden) return;
@@ -398,8 +807,8 @@ async function recenter() {
         5000,
       );
     else if (r.shiftPx! > small * 0.25)
-      showToast(`Re-centered (moved ${Math.round(r.shiftPx!)} px). That was a big drift: a full ◎ Recalibrate will track better.`, 6000);
-    else showToast(`Re-centered (moved ${Math.round(r.shiftPx!)} px).`, 2500);
+      showToast(`Re-centred. That was a big drift: Recalibrate (in Settings) will track better.`, 6000);
+    else showToast(`Re-centred.`, 2500);
   } finally {
     recentering = false;
     blinkBurst.reset();
@@ -421,26 +830,26 @@ function setExpanded(v: boolean, fromMain = false) {
   if (!fromMain) bridge?.setExpanded(v);
 }
 bridge?.onVisibility((v) => setExpanded(v, true));
-// The 👁 badge: hover makes the click-through window clickable, click opens the keyboard.
+// The badge: hover makes the click-through window clickable, click opens the keyboard.
 pill.addEventListener("mouseenter", () => bridge?.setClickable(true));
 pill.addEventListener("mouseleave", () => bridge?.setClickable(false));
 pill.addEventListener("click", () => setExpanded(true));
 
 /** Look at the top-right corner for 1.5 s to open the overlay — no hands or voice needed. */
-function hotCorner(g: GazePoint) {
-  if (!settings.hotCorner || g.source !== "camera" || !gaze.calibrated || !g.valid) {
+function hotCorner(g2: GazePoint) {
+  if (!settings.hotCorner || g2.source !== "camera" || !gaze.calibrated || !g2.valid) {
     hotCornerSince = null;
     pill.style.setProperty("--p", "0");
     return;
   }
-  const inCorner = g.x > innerWidth - 160 && g.y < 160;
+  const inCorner = g2.x > innerWidth - 160 && g2.y < 160;
   if (!inCorner) {
     hotCornerSince = null;
     pill.style.setProperty("--p", "0");
     return;
   }
-  hotCornerSince ??= g.t;
-  const p = Math.min(1, (g.t - hotCornerSince) / 1500);
+  hotCornerSince ??= g2.t;
+  const p = Math.min(1, (g2.t - hotCornerSince) / 1500);
   pill.style.setProperty("--p", String(p));
   if (p >= 1) {
     hotCornerSince = null;
@@ -449,53 +858,66 @@ function hotCorner(g: GazePoint) {
 }
 
 // ---------- actions ----------
-// Speaking goes through the voice router: the user's own hosted voice (ElevenLabs, via our service, one voice per
-// user from "My voice") when they have one and it is active, otherwise the system voice. A slow, failing, paused or
-// missing voice never leaves the user silent. The server's single-voice flow (server/elevenlabs.ts, a fixed
-// ELEVENLABS_VOICE_ID) is not used by the app. See docs/VOICE_ENGINE_FLOW.md for the tiers and docs/AWS_VOICE_HANDOFF.md for the service.
-let voiceApiSettings: VoiceApiSettings = loadVoiceApiSettings(localStorage);
-const voiceApi = new HostedVoiceApi(apiConfigFrom(() => voiceApiSettings));
-const voiceCtl = new HostedVoiceController(voiceApi, async (text) => (await voice.speak(text).done));
-const voice = new VoiceRouter({
-  providers: [new HostedVoice(voiceApi, new BrowserAudioSink(), () => voiceCtl.usable()), new SystemVoice()],
-  // The service is the source of truth for consent: the cloned tier is allowed only while the voice is active there.
-  policy: () => ({ allows: (tier) => tier === "system" || (tier === "cloned" && voiceCtl.usable()) }),
-  // Over the network the first sound takes longer than a local clip; past this the system voice speaks instead.
-  startBudgetMs: { cloned: 2500 },
-  onResult: () => updateStatus(),
-});
-const myVoice = mountMyVoice({
-  dialog: $<HTMLDialogElement>("#myvoice"),
-  controller: voiceCtl,
-  getApiSettings: () => voiceApiSettings,
-  saveApiSettings: (s) => {
-    voiceApiSettings = s;
-    saveVoiceApiSettings(localStorage, s);
-  },
-  usingDevLogin,
-});
-$("#voice-btn").addEventListener("click", () => myVoice.open());
-
-function voiceStatusText(): string {
-  const st = voiceCtl.status();
-  const last = voice.last;
-  if (st === "active" && !voiceCtl.usable()) return "🗣 my voice needs verifying";
-  if (st === "active") {
-    return last && last.tier === "system" && last.fellBack ? `🗣 system voice: ${friendlyReason(last.reason) || "my voice unavailable"}` : last?.tier === "cloned" ? `🗣 my voice · ${last.ttfaMs} ms` : "🗣 my voice ready";
+/** Buttons on the message screen and header (ids "u:…"). */
+function uiAction(a: string) {
+  const empty = !kb.text().trim() && !(kb === gazeKb && gazeKb.slots.length);
+  switch (a) {
+    case "speak":
+      return void doAction("speak");
+    case "yes":
+      return say("Yes.", false);
+    case "no":
+      return say("No.", false);
+    case "undo":
+      if (kb.undo()) render();
+      return;
+    case "delword":
+      kb.deleteWord();
+      return render();
+    case "clear":
+      if (empty) return;
+      if (settings.confirmClear)
+        return showSheet({ kind: "confirm", title: "Clear your whole message?", body: "Undo can bring it back.", yes: "Clear it", onYes: () => { kb.clearUndoable(); render(); } });
+      kb.clearUndoable();
+      render();
+      return showToast("Message cleared. Undo brings it back.", 2500);
+    case "again":
+      if (history[0]) say(history[0]);
+      return;
+    case "pause":
+      return pauseSpeech();
+    case "stop":
+      return stopSpeech();
+    case "voice":
+      return openScreen(screenName === "voice" ? null : "voice");
+    case "phrases":
+    case "access":
+    case "settings":
+    case "recent":
+      return openScreen(screenName === a ? null : (a as ScreenName));
+    case "back":
+      return openScreen(null);
+    case "backset":
+      return openScreen("settings");
+    case "rest":
+      return showSheet({ kind: "rest" });
+    case "help":
+      return showSheet({ kind: "alarm" });
   }
-  return st === "paused" ? "🗣 my voice paused" : "";
 }
 
-function speak(text: string) {
-  if (!text.trim()) return;
-  if (containsSlur(text)) return void showToast(SLUR_NOTICE, 3500); // also covers voice commands
-  void voice.speak(text);
+function smallestTargetPx() {
+  rectsDirty = true;
+  measure(appRoot);
+  return rects.length ? Math.round(Math.min(...rects.map((r) => Math.min(r.right - r.left, r.bottom - r.top)))) : 0;
 }
 
+/** Keyboard menu actions (Done panel) and actions shared with voice commands. */
 async function doAction(a: string) {
-  const text = kb.text().trim();
+  const raw = kb.text().trim();
+  const text = punctuate(raw);
   // Last line of defence for anything that leaves the app (works for every keyboard, typed any way).
-  if ((a === "speak" || a === "insert" || a === "copy") && containsSlur(text)) {
+  if ((a === "speak" || a === "insert" || a === "copy") && containsSlur(raw)) {
     showToast(SLUR_NOTICE, 3500);
     return;
   }
@@ -507,27 +929,31 @@ async function doAction(a: string) {
   }
   switch (a) {
     case "speak":
-      speak(text);
-      if (text) acceptSentenceSamples();
-      if (!benchmark && text) {
-        predictor.learn(text);
-        kb.clear();
+      if (!raw) {
+        showToast("Write something first, then look at Speak.", 2800);
+        break;
+      }
+      say(text);
+      acceptSentenceSamples();
+      if (!benchmark) {
+        predictor.learn(raw);
+        kb.clearUndoable();
       }
       break;
     case "insert":
-      if (text && bridge) {
+      if (raw && bridge) {
         acceptSentenceSamples();
-        predictor.learn(text);
-        const ok = await bridge.insertText(text);
-        showToast(ok ? "Inserted into the focused app" : "Copied — press ⌘V / Ctrl+V to paste (grant Accessibility for auto-paste)");
-        kb.clear();
+        predictor.learn(raw);
+        const ok = await bridge.insertText(raw);
+        showToast(ok ? "Inserted into the focused app" : "Copied. Press ⌘V or Ctrl+V to paste (grant Accessibility for auto-paste).");
+        kb.clearUndoable();
       }
       break;
     case "copy":
-      if (text) {
-        await navigator.clipboard.writeText(text).catch(() => {});
+      if (raw) {
+        await navigator.clipboard.writeText(raw).catch(() => {});
         acceptSentenceSamples();
-        predictor.learn(text);
+        predictor.learn(raw);
         showToast("Copied to clipboard");
       }
       break;
@@ -540,28 +966,30 @@ async function doAction(a: string) {
     case "recenter":
       await recenter();
       break;
+    case "voice":
+    case "phrases":
+    case "recent":
+    case "access":
     case "settings":
-      openSettings();
+      uiAction(a);
+      return;
+    case "rest":
+      showSheet({ kind: "rest" });
       break;
     case "benchmark-done":
       if (benchmark) finishRun(performance.now());
-      else showToast("No benchmark run active — start one from the top bar.");
+      else showToast("No benchmark run active. Start one from Settings, For caretakers.");
       break;
   }
   render();
 }
 
-function smallestTargetPx() {
-  rectsDirty = true;
-  measure();
-  return rects.length ? Math.round(Math.min(...rects.map((r) => Math.min(r.right - r.left, r.bottom - r.top)))) : 0;
-}
-
 // ---------- calibration ----------
-async function calibrate() {
+/** Full calibration. Resolves true when it finished (mouse mode needs none). */
+async function calibrate(): Promise<boolean> {
   if (gaze.source !== "camera") {
     showToast("Calibration needs the camera. You're in mouse mode.");
-    return;
+    return gaze.source === "mouse";
   }
   const stats = await runCalibration(
     gaze,
@@ -569,29 +997,35 @@ async function calibrate() {
     geometry,
     nosePointer ? "Point your nose at each dot by turning your head. Keep going until it disappears." : undefined,
   );
+  dwell.reset();
+  targetTracker.reset();
   if (!stats) {
     showToast("Calibration cancelled or failed.");
-    return;
+    return false;
   }
   lastError = stats;
   rec.event("calibrated", { model: nosePointer ? "head" : "eye", error: stats, samples: gaze.calibrationSamples.length });
-  const g = geometry();
+  const g2 = geometry();
   const weakDir = !(stats.dirX > 0.7 && stats.dirY > 0.7);
   showToast(
-    `${weakDir ? `<b style="color:#ff7b72">⚠ Direction check failed</b> (pointer follows your target with correlation x ${stats.dirX.toFixed(2)}, y ${stats.dirY.toFixed(2)}; it should be above 0.7). This calibration may move the pointer the wrong way. Press ◎ Calibrate again.<br>` : ""}<b>Calibrated.</b> Mean error <b>${stats.meanDeg.toFixed(2)}°</b> (${stats.meanPx.toFixed(0)} px), precision ±${stats.precisionDeg.toFixed(
-      2,
-    )}°, n=${stats.n}.<br><small>Assumes ${settings.screenDiagonalIn}" screen at ${g.distanceCm.toFixed(0)} cm${
-      settings.distanceCm ? "" : " (estimated from iris size)"
-    }. Smallest target here: ${smallestTargetPx()} px.</small>`,
-    weakDir ? 15000 : 9000,
+    `${weakDir ? `<b>The pointer may move the wrong way.</b> Recalibrate from Settings.<br>` : "<b>Calibrated.</b> "}<small>Mean error ${stats.meanDeg.toFixed(2)}° (${stats.meanPx.toFixed(0)} px), precision ±${stats.precisionDeg.toFixed(2)}°, n=${stats.n}. Assumes ${settings.screenDiagonalIn}" screen at ${g2.distanceCm.toFixed(0)} cm${
+      settings.distanceCm ? "" : " (estimated)"
+    }. Smallest target: ${smallestTargetPx()} px.</small>`,
+    weakDir ? 12000 : 6000,
   );
   localStorage.setItem("gazetype.lastError.v1", JSON.stringify(stats));
+  return true;
 }
 
 // ---------- start ----------
-async function startCamera(nose = false) {
-  home.querySelector<HTMLElement>(".home-msg")!.textContent = "Loading face model…";
+async function startCamera(mode: "eye" | "head" | "mouse"): Promise<boolean> {
+  if (mode === "mouse") {
+    gaze.source = "mouse";
+    showToast("Mouse mode: hover to select, or click. Same screens as with the eyes.");
+    return true;
+  }
   try {
+    const nose = mode === "head";
     nosePointer = nose;
     if (nose) gaze.configureNose();
     rec.featureNames = nose ? HEAD_FEATURES : EYE_FEATURES;
@@ -599,32 +1033,40 @@ async function startCamera(nose = false) {
     const where = await tracker.init();
     await tracker.start();
     gaze.source = "camera";
-    home.hidden = true;
-    showToast(`${nose ? "Head tracker" : "Eye tracker"} on (${where}). Video stays on this device.`);
-    await calibrate();
+    cameraStarted = true;
+    if (settings.tracker !== mode) {
+      settings.tracker = mode;
+      storeSettings();
+      prefsChanged();
+    }
+    showToast(`${nose ? "Head tracker" : "Eye tracker"} on (${where}). Video stays on this device.`, 3000);
+    return true;
   } catch (err) {
-    home.querySelector<HTMLElement>(".home-msg")!.textContent = `Camera failed: ${(err as Error).message}. Try mouse mode.`;
+    showToast(`Camera failed: ${esc((err as Error).message)}. Check the camera permission, or try mouse mode.`, 7000);
+    return false;
   }
 }
 
-function startMouse() {
-  gaze.source = "mouse";
-  home.hidden = true;
-  showToast("Mouse mode: hover to dwell-select, or click. Same UI and metrics as gaze.");
+function showMain() {
+  onboard.hide();
+  appRoot.hidden = false;
+  render();
 }
 
-$("#start-camera").addEventListener("click", () => void startCamera());
-$("#start-nose").addEventListener("click", () => void startCamera(true));
-$("#start-mouse").addEventListener("click", startMouse);
-$("#kb-toggle").addEventListener("click", () => {
+/** After the camera starts: set up a new profile, or calibrate and go to the keyboard. */
+function afterCamera() {
+  if (!isOnboarded(profiles.active)) return onboard.begin();
+  showMain();
+  if (gaze.source === "camera") void calibrate();
+}
+
+function toggleKeyboard() {
   kb = kb === gazeKb ? baseKb : gazeKb;
   kb.clear();
   if (benchmark) startRun(benchmark.index);
   else session = new TypingSession(kb.name, settings.selectionMode);
   render();
-});
-$("#recal").addEventListener("click", () => void calibrate());
-$("#record-btn").addEventListener("click", openRecord);
+}
 
 // ---------- session recording (offline evaluation) ----------
 function openRecord() {
@@ -637,7 +1079,7 @@ function openRecord() {
   dlg.onclose = async () => {
     if (dlg.returnValue !== "ok") return;
     const fd = new FormData(form);
-    const g = geometry();
+    const g2 = geometry();
     const meta: SessionMeta = {
       participant: String(fd.get("participant") ?? "").trim(),
       mode: fd.get("mode") === "short" ? "short" : "full",
@@ -645,7 +1087,7 @@ function openRecord() {
       lighting: String(fd.get("lighting") ?? ""),
       notes: String(fd.get("notes") ?? ""),
       distanceCm: Number(fd.get("distanceCm")) || 0,
-      screenDiagonalIn: g.screenDiagonalIn,
+      screenDiagonalIn: g2.screenDiagonalIn,
       hfovDeg: settings.hfovDeg,
     };
     const n = await recordSession(gaze, tracker, calRoot, { meta, video: fd.get("video") === "on" });
@@ -658,7 +1100,7 @@ function openRecord() {
   };
   dlg.showModal();
 }
-$("#export-data").addEventListener("click", () => {
+function exportData() {
   const data = rec.toJSON({
     model: nosePointer ? "head" : "eye",
     featureNames: rec.featureNames,
@@ -668,17 +1110,17 @@ $("#export-data").addEventListener("click", () => {
   });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: "application/json" }));
-  a.download = `gazetype-session-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  a.download = `visualeyes-session-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   showToast(`Exported ${rec.frameCount} frames + events. Numbers only, no video.`);
-});
+}
 // Import a nose-pointer calibration made in the other build. Accepts either that app's "Export data" JSON
 // ({calibration: [{f, x, y}], window}) or its saved calibration object ({samples: [{features, x, y}], w, h}).
-$("#import-cal").addEventListener("click", () => {
+function importCalibration() {
   if (gaze.source !== "camera" || !nosePointer) return showToast("Start the head tracker first, then import.");
   $<HTMLInputElement>("#import-file").click();
-});
+}
 $<HTMLInputElement>("#import-file").addEventListener("change", async (e) => {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -689,7 +1131,7 @@ $<HTMLInputElement>("#import-file").addEventListener("change", async (e) => {
     const raw: { f: number[]; x: number; y: number }[] = (d.calibration ?? d.samples ?? []).map((s: { f?: number[]; features?: number[]; x: number; y: number }) => ({ f: s.f ?? s.features ?? [], x: s.x, y: s.y }));
     const srcW: number = d.window?.w ?? d.w ?? innerWidth;
     const srcH: number = d.window?.h ?? d.h ?? innerHeight;
-    if (d.model && d.model !== "head") return showToast(`That file is from the "${d.model}" model, not the head tracker.`);
+    if (d.model && d.model !== "head") return showToast(`That file is from the "${esc(String(d.model))}" model, not the head tracker.`);
     if (raw.length < 30 || raw.some((s) => s.f.length !== 10)) return showToast("Not a nose-pointer calibration (expected 10 head features per sample).");
     // Samples are in screen pixels; rescale if the window size differs from when they were recorded.
     const sx = innerWidth / srcW;
@@ -697,12 +1139,9 @@ $<HTMLInputElement>("#import-file").addEventListener("change", async (e) => {
     gaze.setCalibration(raw.map((s) => ({ features: s.f, x: s.x * sx, y: s.y * sy })));
     showToast(`Imported ${raw.length} calibration samples${Math.abs(sx - 1) > 0.02 || Math.abs(sy - 1) > 0.02 ? ` (rescaled from ${srcW}x${srcH})` : ""}. Sit as you did when you calibrated.`, 7000);
   } catch (err) {
-    showToast(`Import failed: ${(err as Error).message}`);
+    showToast(`Import failed: ${esc((err as Error).message)}`);
   }
 });
-$("#settings-btn").addEventListener("click", openSettings);
-$("#bench-btn").addEventListener("click", () => startRun(benchIndex));
-$("#results-btn").addEventListener("click", showResults);
 
 // ---------- benchmark ----------
 const RUNS_KEY = "gazetype.runs.v1";
@@ -720,8 +1159,14 @@ function startRun(index: number) {
   kb.clear();
   session = new TypingSession(kb.name, gaze.source === "mouse" ? `${settings.selectionMode}+mouse` : settings.selectionMode, target);
   targetBar.hidden = false;
-  targetBar.innerHTML = `Type: <b>${target}</b> <small>(timer starts on first selection · ${kb === gazeKb ? "GazeType" : "Baseline"})</small> <button id="next-sentence" type="button">⏭ Next sentence</button>`;
+  targetBar.innerHTML = `Type: <b>${target}</b> <small>(timer starts on first selection · ${kb === gazeKb ? "GazeType" : "Baseline"} · finish from Done)</small> <button id="next-sentence" type="button">Next sentence</button> <button id="stop-bench" type="button">Stop</button>`;
   $("#next-sentence").addEventListener("click", () => startRun(++benchIndex));
+  $("#stop-bench").addEventListener("click", () => {
+    benchmark = null;
+    targetBar.hidden = true;
+    kb.clear();
+    render();
+  });
   blink.accepted = blink.rejectedShort = blink.rejectedLong = 0;
   render();
 }
@@ -767,14 +1212,14 @@ function showResults() {
   const dlg = $<HTMLDialogElement>("#results");
   dlg.querySelector(".body")!.innerHTML = all.length
     ? `<table><thead><tr><th>Keyboard · selection</th><th>Runs</th><th>WPM</th><th>Sel/char</th><th>Error</th><th>False sel.</th></tr></thead><tbody>${rows}</tbody></table>`
-    : "<p>No runs yet. Use <b>⏱ Benchmark</b> to start one on each keyboard.</p>";
+    : "<p>No runs yet. Start one from Settings, For caretakers, on each keyboard.</p>";
   dlg.showModal();
 }
 $("#export-runs").addEventListener("click", () => {
   const blob = new Blob([JSON.stringify({ runs: runs(), calibration: lastError, settings }, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `gazetype-runs-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `visualeyes-runs-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
 });
 $("#clear-runs").addEventListener("click", () => {
@@ -782,7 +1227,7 @@ $("#clear-runs").addEventListener("click", () => {
   showResults();
 });
 
-// ---------- settings dialog ----------
+// ---------- advanced settings dialog (caretaker) ----------
 function openSettings() {
   const dlg = $<HTMLDialogElement>("#settings");
   const form = dlg.querySelector("form")!;
@@ -804,41 +1249,55 @@ $<HTMLFormElement>("#settings form").addEventListener("submit", () => {
     (settings as unknown as Record<string, unknown>)[k] =
       typeof d === "boolean" ? (input as HTMLInputElement).checked : typeof d === "number" ? Number(input.value) : input.value;
   }
-  baseKb.withPrediction = settings.baselinePrediction;
   saveSettings();
   if (settings.voice && !prevVoice) void enableVoice();
   if (!settings.voice && prevVoice) stopVoice?.();
-  render();
 });
 
-// ---------- voice ----------
+// ---------- voice commands ----------
 let stopVoice: (() => void) | null = null;
 async function enableVoice() {
   try {
     stopVoice = await startVoiceCommands((cmd, heard) => {
-      showToast(`🎙 “${heard}”`, 1500);
+      showToast(`“${esc(heard)}”`, 1500);
       if (cmd === "show") setExpanded(true);
       else if (cmd === "hide") setExpanded(false);
-      else speak(kb.text());
+      else void doAction("speak");
     });
-    showToast("Voice commands on: say “gaze type” / “open keyboard” or “hide keyboard”.");
+    showToast("Voice commands on: say “gaze type” or “open keyboard”, or “hide keyboard”.");
   } catch (err) {
-    showToast(`Voice commands unavailable: ${(err as Error).message}`);
+    showToast(`Voice commands unavailable: ${esc((err as Error).message)}`);
     settings.voice = false;
     saveSettings();
   }
 }
 
 // ---------- profiles ----------
-const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+const ONBOARDED = "visualeyes.onboarded.v1";
+const DRAFT = "visualeyes.aiprefs.v1";
+
+/** Has this profile been through onboarding? Profiles from before onboarding count if they already have an AI profile. */
+function isOnboarded(p: Profile): boolean {
+  return localStorage.getItem(profiles.keyFor(p.id, ONBOARDED)) === "1" || !!(p.about.trim() || p.people.length || p.samples.length);
+}
+
+/** What onboarding last saved for this profile, or a draft made from the profile itself. */
+function draftFor(p: Profile): Draft {
+  try {
+    const d = JSON.parse(localStorage.getItem(profiles.keyFor(p.id, DRAFT)) ?? "null") as Draft | null;
+    if (d) return { ...emptyDraft(), ...d, people: p.people, ai: settings.ai };
+  } catch {
+    /* fall through */
+  }
+  return { ...emptyDraft(), call: p.name === "Me" ? "" : p.name, extra: p.about, people: p.people, ai: settings.ai };
+}
 
 /** Everything that depends on who is typing: prediction data, calibration, LLM context. */
 function applyProfile(p: Profile) {
   gaze.storageKey = profiles.keyFor(p.id, CAL_KEY);
   setLlmProfile({ id: p.id, name: p.name, about: p.about, people: p.people, samples: p.samples });
-  $("#profile-btn").textContent = `👤 ${p.name}`;
-  fillProfileSelect($<HTMLSelectElement>("#profile-select"), p.id);
-  void llmWarm();
+  loadHistory();
+  if (settings.ai) void llmWarm();
 }
 
 function switchProfile(id: string) {
@@ -847,7 +1306,7 @@ function switchProfile(id: string) {
   predictor.useStore(profiles.store(p.id));
   applyProfile(p);
   // Each person's eyes need their own calibration.
-  if (gaze.source === "camera" && !gaze.loadSavedCalibration()) showToast(`No calibration saved for ${esc(p.name)} yet: choose ◎ Calibrate.`);
+  if (gaze.source === "camera" && !gaze.loadSavedCalibration()) showToast(`No calibration saved for ${esc(p.name)} yet: choose Recalibrate.`);
   kb.clear();
 }
 
@@ -944,7 +1403,7 @@ $("#pf-export").addEventListener("click", () => {
   const blob = new Blob([profiles.exportProfile(p.id)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `gazetype-profile-${p.name.replace(/\W+/g, "-").toLowerCase()}.json`;
+  a.download = `visualeyes-profile-${p.name.replace(/\W+/g, "-").toLowerCase()}.json`;
   a.click();
 });
 $<HTMLInputElement>("#pf-import").addEventListener("change", async (e) => {
@@ -960,52 +1419,52 @@ $<HTMLInputElement>("#pf-import").addEventListener("change", async (e) => {
     pf.learned.textContent = `Couldn't import: ${(err as Error).message}`;
   }
 });
-$("#profile-btn").addEventListener("click", openProfiles);
-$("#profile-manage").addEventListener("click", openProfiles);
-$<HTMLSelectElement>("#profile-select").addEventListener("change", (e) => {
-  switchProfile((e.target as HTMLSelectElement).value);
-  render();
-});
 
-/**
- * Check the local server for AI suggestions and voice, and show the result on the start screen.
- * `npm run dev:all` starts the page and the server together, so the first check can beat the
- * server: while it isn't reachable, check again every 2 s for up to a minute.
- */
-/** The start-screen line about speech: the user's own onboarded voice (My voice), else the system voice. */
+// ---------- service status (AI and voice), shown on the start screen ----------
+let llmLine = { text: "Checking AI suggestions…", on: false };
+let ttsLine = { text: "Checking voice…", on: false };
+
 function updateTtsLine() {
-  const el = $("#tts-status");
   const st = voiceCtl.status();
   const on = st === "active" && voiceCtl.usable();
-  el.className = `llm-status ${on ? "on" : "off"}`;
-  el.textContent = on
-    ? "🗣 Speaking in your voice"
-    : st === "active"
-      ? "Voice: your voice needs verifying at elevenlabs.com first (open 🗣 My voice). Speaking in the system voice until then."
-      : st === "paused"
-        ? "Voice: your voice is paused (system voice)."
-        : "Voice: system voice. Open 🗣 My voice to create one that sounds like you.";
+  ttsLine = {
+    on,
+    text: on
+      ? "Speaking in your own voice"
+      : st === "active"
+        ? "Your voice needs verifying at elevenlabs.io first (open My voice). The standard voice speaks until then."
+        : st === "paused"
+          ? "Your voice is paused: the standard voice speaks."
+          : "Standard voice. Open My voice to create one that sounds like you.",
+  };
+  if (onboard.visible && onboard.step === "start") onboard.render();
 }
 
+/**
+ * Check the local server for AI suggestions and voice. `npm run dev:all` starts the page and the server together,
+ * so the first check can beat the server: while it isn't reachable, check again every 2 s for up to a minute.
+ */
 async function refreshServices(attempt = 0) {
   await llmAvailable(attempt > 0);
   const ai = llmStatus();
   llmOn = ai.on;
-  const llmEl = $("#llm-status");
-  llmEl.className = `llm-status ${ai.on ? "on" : "off"}`;
-  llmEl.textContent = ai.on
-    ? `✨ AI suggestions on${ai.fastModel ? ` (${ai.fastModel})` : ""}`
-    : ai.reason === "no-key"
-      ? "AI suggestions off: the LLM server has no API key. Add ANTHROPIC_API_KEY to VisualEyes/.env and restart it."
-      : "AI suggestions off: LLM server not running (npm run dev:all). On-device prediction still works.";
+  llmLine = {
+    on: ai.on,
+    text: ai.on
+      ? `AI suggestions on${ai.fastModel ? ` (${ai.fastModel})` : ""}`
+      : ai.reason === "no-key"
+        ? "AI suggestions off: the AI server has no API key. Add ANTHROPIC_API_KEY to VisualEyes/.env and restart it."
+        : "AI suggestions off: the AI server isn't running (npm run dev:all). Word prediction still works.",
+  };
   updateTtsLine();
-  if (ai.on) void llmWarm();
+  if (ai.on && settings.ai) void llmWarm();
   if (ai.reason === "no-server" && attempt < 30) setTimeout(() => void refreshServices(attempt + 1), 2000);
 }
 
 // ---------- account: Auth0 sign-in, preferences and voice in the cloud ----------
 // Auth0 signs people in (passwords, sign-up, resets, social logins). Its access token goes to our hosted service (the
 // same one as "My voice"), which keys each person's preferences and voice in DynamoDB by their Auth0 user id.
+// In VisualEyes the account belongs to the caretaker, who signs in during onboarding or from Settings.
 const auth0Cfg = auth0Config((import.meta as unknown as { env: Record<string, string | undefined> }).env);
 const auth = auth0Cfg && canRedirect() ? new Auth0Session(auth0Cfg) : null;
 const accountApi = new AccountApi(() => voiceApiSettings.baseUrl);
@@ -1025,6 +1484,7 @@ function applyRemotePrefs(r: SyncedPrefs) {
     if (v !== undefined && typeof v === typeof DEFAULTS[k]) s[k] = v; // ignore anything this build doesn't understand
   }
   storeSettings();
+  applyLook();
   baseKb.withPrediction = settings.baselinePrediction;
   if (r.profile) {
     const { name, about, people, samples } = r.profile;
@@ -1050,7 +1510,7 @@ function profileFor(user: SignedInUser): string {
     const k = localStorage.key(i);
     if (k?.startsWith(ACCOUNT_PROFILE)) claimed.add(localStorage.getItem(k) ?? "");
   }
-  const id = claimed.has(profiles.active.id) ? profiles.create(user.name || user.email || "Me").id : profiles.active.id;
+  const id = claimed.has(profiles.active.id) ? profiles.create("Me").id : profiles.active.id;
   localStorage.setItem(ACCOUNT_PROFILE + user.sub, id);
   return id;
 }
@@ -1060,28 +1520,19 @@ const prefsSync = new PrefsSync(
   token,
   collectPrefs,
   (e) => {
-    if (e.status === 401) void signOut("Your sign-in has ended. Sign in again to keep your settings in step.");
+    if (e.status === 401) void signOut("Your sign-in has ended. Sign in again to keep settings in step.");
   },
   1500,
   () => account !== null,
 );
 prefsChanged = () => prefsSync.schedule();
 
-function updateAccountLine() {
-  $("#account-line").textContent = account ? `Signed in as ${account.name || account.email || "you"}` : "Not signed in: settings stay on this computer.";
-  $("#account-btn").textContent = account ? "Sign out" : "Sign in";
-  $("#account-btn").hidden = !auth;
-}
-
 async function startAccount(user: SignedInUser) {
   account = user;
   setSkippedSignIn(localStorage, false);
   setTokenProvider(token); // "My voice" now belongs to this Auth0 user
-  const firstTime = !localStorage.getItem(ACCOUNT_PROFILE + user.sub);
   switchProfile(profileFor(user));
-  if (firstTime && user.name && profiles.active.name === "Me") profiles.update(profiles.active.id, { name: user.name });
   applyProfile(profiles.active);
-  updateAccountLine();
   void voiceCtl.refresh().then(updateTtsLine);
   try {
     const t = await token();
@@ -1089,7 +1540,7 @@ async function startAccount(user: SignedInUser) {
     const remote = await prefsSync.pull(); // the service's copy wins; a brand-new account gets this computer's
     if (remote) applyRemotePrefs(remote);
   } catch (e) {
-    showToast(`Signed in, but your settings couldn't be loaded: ${esc((e as Error).message)}`);
+    showToast(`Signed in, but settings couldn't be loaded: ${esc((e as Error).message)}`);
   }
 }
 
@@ -1097,50 +1548,116 @@ async function signOut(message?: string) {
   if (account) await prefsSync.flush(); // don't lose a change made in the last second
   account = null;
   setTokenProvider(null);
-  updateAccountLine();
   if (message) showToast(esc(message), 6000);
+  render();
   await auth?.signOut(); // ends the Auth0 session too, then comes back to this page signed out
 }
 
-const authScreen = mountAuthScreen({
-  root: $("#auth"),
-  unavailable: () =>
-    !auth0Cfg
-      ? "Sign-in isn't set up on this copy yet (VITE_AUTH0_DOMAIN, VITE_AUTH0_CLIENT_ID and VITE_AUTH0_AUDIENCE in VisualEyes/.env)."
-      : !canRedirect()
-        ? "Sign-in needs the web version of GazeType. You can still use it without an account here."
-        : null,
-  signIn: (signUp) => (auth ? auth.signIn(signUp) : Promise.reject(new Error("sign-in is not set up"))),
-  onSkip: () => {
-    setSkippedSignIn(localStorage, true);
-    authScreen.hide();
-  },
-});
-$("#account-btn").addEventListener("click", () => (account ? void signOut() : authScreen.show()));
+/** Why sign-in can't be offered on this copy. */
+function onboardAuthWhy(): string {
+  return !auth0Cfg
+    ? "Sign-in isn't set up on this copy yet (VITE_AUTH0_DOMAIN, VITE_AUTH0_CLIENT_ID and VITE_AUTH0_AUDIENCE in VisualEyes/.env)."
+    : "Sign-in needs the web version of VisualEyes.";
+}
 
 /** Finish an Auth0 redirect or restore the last session, before anything asks the service about this user's voice. */
 async function initAccount() {
-  let user: SignedInUser | null = null;
-  if (auth) {
-    try {
-      user = await auth.init();
-    } catch (e) {
-      showToast(`Sign-in problem: ${esc((e as Error).message)}`, 8000);
-    }
+  if (!auth) return;
+  try {
+    const user = await auth.init();
+    if (user) await startAccount(user);
+  } catch (e) {
+    showToast(`Sign-in problem: ${esc((e as Error).message)}`, 8000);
   }
-  if (user) await startAccount(user);
-  else if (!skippedSignIn(localStorage)) authScreen.show();
-  updateAccountLine();
 }
+
+// ---------- onboarding ----------
+const onboard = new Onboarding(onboardRoot, {
+  settings,
+  saveSettings,
+  toast: showToast,
+  calibrated: () => gaze.source === "mouse" || (gaze.source === "camera" && gaze.calibrated),
+  mouse: () => gaze.source === "mouse",
+  head: () => (cameraStarted ? nosePointer : true),
+  cameraOn: () => cameraStarted || gaze.source === "mouse",
+  faceVisible: () => gaze.faceVisible,
+  cameraStream: () => (video.srcObject instanceof MediaStream ? video.srcObject : null),
+  startCamera,
+  afterCamera,
+  calibrate,
+  auth: () => ({
+    available: !!auth,
+    why: auth ? null : onboardAuthWhy(),
+    signedIn: !!account,
+    who: account?.name || account?.email || "",
+  }),
+  signIn: (signUp) => (auth ? auth.signIn(signUp) : Promise.reject(new Error("sign-in is not set up"))),
+  signOut: () => void signOut(),
+  skipSignIn: () => setSkippedSignIn(localStorage, true),
+  finish: (d, about) => {
+    const p = profiles.active;
+    const name = (d.call.trim() || d.full.trim().split(/\s+/)[0] || p.name).slice(0, 60);
+    const people = d.people.slice(0, 40);
+    profiles.update(p.id, { name, about, people });
+    if (d.learned && d.consent && d.writing.trim()) {
+      predictor.ingest(d.writing);
+      profiles.update(p.id, { samples: pickSamples([...p.samples, ...splitSentences(d.writing)]) });
+    }
+    predictor.setPinned(people);
+    predictor.setTopics(about);
+    localStorage.setItem(profiles.keyFor(p.id, ONBOARDED), "1");
+    // Their writing is learned now; keep the answers, not the text, for the next review.
+    localStorage.setItem(profiles.keyFor(p.id, DRAFT), JSON.stringify({ ...d, writing: "", learned: d.learned }));
+    applyProfile(profiles.active);
+    settings.ai = d.ai;
+    saveSettings();
+    showMain();
+    showToast(`Saved. Suggestions now use what you chose${d.ai ? "" : ". AI suggestions are off"}.`, 3500);
+    if (gaze.source === "camera" && !gaze.calibrated) void calibrate();
+  },
+  cancel: () => {
+    showMain();
+    if (gaze.source === "camera" && !gaze.calibrated) void calibrate();
+  },
+  examples: async (d, about) => {
+    if (!d.ai || !(await llmAvailable())) return null;
+    const p = profiles.active;
+    setLlmProfile({ id: `preview-${Date.now()}`, name: d.call || p.name, about, people: d.people, samples: d.learned ? pickSamples(splitSentences(d.writing)) : p.samples });
+    try {
+      const out = await llmPredict({ task: "continue", text: "I would like", n: 3 });
+      return out.map((s) => s.replace(/^\s*i would like\s*/i, "").trim()).filter(Boolean);
+    } finally {
+      setLlmProfile({ id: p.id, name: p.name, about: p.about, people: p.people, samples: p.samples });
+    }
+  },
+  sentences: (t) => splitSentences(t).length,
+  profileName: () => profiles.active.name,
+  profiles: () => profiles.list(),
+  activeProfile: () => profiles.active.id,
+  switchProfile: (id) => switchProfile(id),
+  statusLines: () => [llmLine, ttsLine],
+  shown: () => {
+    appRoot.hidden = true;
+    clearHover();
+    hideLostHint();
+  },
+});
+
+voiceCtl.subscribe(() => {
+  if (screenName === "voice" || screenName === "voiceSetup") render();
+  else if (!appRoot.hidden) renderHeader();
+});
 
 // ---------- boot ----------
 async function boot() {
+  applyLook();
   const words = await fetch("./data/words-10k.txt").then((r) => r.text());
   predictor.load(words.split("\n"), CORE_WORDS, SEED_PHRASES);
   await initAccount();
   applyProfile(profiles.active);
   gazeKb.update();
-  render();
+  // Back from the caretaker's sign-in page: carry on where they were. Otherwise the start screen.
+  if (!onboard.resume()) onboard.showStart();
   void voiceCtl.refresh().then(updateTtsLine); // learn whether this user already has a voice; harmless if the service is not running
   void refreshServices();
   try {
@@ -1150,7 +1667,7 @@ async function boot() {
     /* ignore */
   }
   if (settings.voice) void enableVoice();
-  if (bridge) $("#shortcut-hint").textContent = `Toggle: ${bridge.shortcut} · say “gaze type” · or look at the top-right corner`;
+  if (bridge) showToast(`Toggle: ${esc(bridge.shortcut)} · say “gaze type” · or look at the top-right corner`, 5000);
   updateStatus();
 }
 void boot();

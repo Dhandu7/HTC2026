@@ -84,7 +84,11 @@ export interface AudioContextLike {
 }
 
 export class PcmPlayer {
-  constructor(private readonly ctx: AudioContextLike) {}
+  /** `destination` lets the browser put a volume control in between; it defaults to the speakers. */
+  constructor(
+    private readonly ctx: AudioContextLike,
+    private readonly destination?: unknown,
+  ) {}
 
   /** Play one clip now. `started` resolves once it is scheduled; `done` when it ends or is cancelled. */
   play(pcm: Pcm): ProviderPlayback {
@@ -104,7 +108,7 @@ export class PcmPlayer {
       buf.getChannelData(0).set(pcm.samples);
       src = ctx.createBufferSource();
       src.buffer = buf;
-      src.connect(ctx.destination);
+      src.connect(this.destination ?? ctx.destination);
       src.onended = () => finish();
       const go = () => {
         src!.start(ctx.currentTime);
