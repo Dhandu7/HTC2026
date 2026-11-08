@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CORS, hostPythonCandidates, localUv, parseEnvValue, serviceEnv, venvPython } from "../scripts/voice-local";
+import { DEFAULT_CORS, hostPythonCandidates, localUv, parseEnvValue, serviceEnv, venvPython, withEnvFile } from "../scripts/voice-local";
 
 describe("voice-local launcher", () => {
   it("reads the key from .env text the way hosted.sh does", () => {
@@ -39,8 +39,15 @@ describe("voice-local launcher", () => {
 
   it("uses safe local defaults but lets the caller override them", () => {
     const e = serviceEnv({ PATH: "/bin" }, "sk_x");
-    expect(e).toMatchObject({ ELEVENLABS_API_KEY: "sk_x", VOICE_STORE: "memory", AUTH_MODE: "dev", CORS_ORIGINS: DEFAULT_CORS });
+    expect(e).toMatchObject({ ELEVENLABS_API_KEY: "sk_x", VOICE_STORE: "memory", AUTH_MODE: "accounts", CORS_ORIGINS: DEFAULT_CORS });
     const o = serviceEnv({ VOICE_STORE: "dynamodb", AUTH_MODE: "jwt", CORS_ORIGINS: "http://x.test" }, "sk_x");
     expect(o).toMatchObject({ VOICE_STORE: "dynamodb", AUTH_MODE: "jwt", CORS_ORIGINS: "http://x.test" });
+  });
+
+  it("reads the DynamoDB settings from .env, but the real environment wins", () => {
+    const text = "VOICE_STORE=dynamodb\nVOICE_TABLE_NAME=vocaleyes-voices\nAWS_REGION=us-east-1\n";
+    expect(withEnvFile({}, text)).toMatchObject({ VOICE_STORE: "dynamodb", VOICE_TABLE_NAME: "vocaleyes-voices", AWS_REGION: "us-east-1" });
+    expect(withEnvFile({ VOICE_STORE: "memory" }, text).VOICE_STORE).toBe("memory");
+    expect(withEnvFile({}, "").VOICE_STORE).toBeUndefined();
   });
 });

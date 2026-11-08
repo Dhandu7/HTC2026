@@ -75,3 +75,17 @@ class JwtAuth:
         if not USER_ID.match(sub):
             raise AuthError("invalid or expired token")
         return sub
+
+
+class FirstOf:
+    """Accounts mode on a laptop: a bearer token if one is sent, else the dev X-User-Id header. Built only when the
+    server is bound to a loopback address (hosted_main.build_auth), exactly like DevAuth on its own."""
+
+    def __init__(self, primary, fallback):
+        self.primary, self.fallback = primary, fallback
+        self.name = f"{primary.name}+{fallback.name}"
+
+    def user_id(self, request) -> str:
+        if request.headers.get("authorization"):
+            return self.primary.user_id(request)  # a bad token is an error, never a silent fall back to the header
+        return self.fallback.user_id(request)

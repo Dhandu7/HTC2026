@@ -4,7 +4,9 @@ uvicorn>=0.29
 python-multipart>=0.0.9
 httpx>=0.27
 boto3>=1.34
+botocore[crt]>=1.34   # reads credentials from `aws login` on a laptop (a role in AWS does not need it)
 PyJWT[crypto]>=2.8
+argon2-cffi>=23.1   # password hashing (argon2id) for accounts
 # clip quality checks and decoding (shared with the local lab)
 numpy>=1.26
 soundfile>=0.12
