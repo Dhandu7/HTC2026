@@ -613,7 +613,6 @@ function startMouse() {
   showToast("Mouse mode: hover to dwell-select, or click. Same UI and metrics as gaze.");
 }
 
-$("#start-camera").addEventListener("click", () => void startCamera());
 $("#start-nose").addEventListener("click", () => void startCamera(true));
 $("#start-mouse").addEventListener("click", startMouse);
 $("#kb-toggle").addEventListener("click", () => {
