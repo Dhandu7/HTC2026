@@ -9,7 +9,7 @@ import { SessionRecorder } from "./metrics/recorder";
 import { BlinkSelector, DwellSelector, TargetTracker, type Rect } from "./input/selection";
 import { PredictionEngine } from "./predict/engine";
 import { CORE_WORDS, SEED_PHRASES, BENCHMARK_SENTENCES } from "./predict/vocab";
-import { llmAvailable, llmPredict, llmStatus, llmWarm, setLlmProfile } from "./predict/llm";
+import { llmAvailable, llmPredict, llmStatus, llmWarm, setLlmProfile, setLlmToken } from "./predict/llm";
 import { splitSentences } from "./predict/engine";
 import { ProfileManager, pickSamples, type Profile } from "./profile/profiles";
 import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost } from "./ui/keyboards";
@@ -296,7 +296,8 @@ const screens = makeScreens({
   signIn: () => void auth?.signIn(false),
   signOut: () => void signOut(),
   tools: () => caretakerTools(),
-  aiStatus: () => (llmOn ? "The AI is connected." : "The AI server isn't running, so only word prediction works."),
+  aiStatus: () =>
+    llmOn ? "The AI is connected." : llmStatus().reason === "sign-in" ? "A caretaker signs in to turn the AI on." : "The AI server isn't running, so only word prediction works.",
 });
 const voiceScreens = makeVoiceScreens({
   controller: voiceCtl,
@@ -704,7 +705,7 @@ function onGaze(g2: GazePoint) {
   cursor.hidden = !show;
   if (show) {
     // Hints at accuracy without covering what the user is trying to read.
-    const r = Math.max(14, lastError ? Math.min(lastError.meanPx * 0.5, 44) : 14);
+    const r = Math.max(8, lastError ? Math.min(lastError.meanPx * 0.4, 50) : 8);
     cursor.style.transform = `translate(${g2.x - r}px, ${g2.y - r}px)`;
     cursor.style.width = cursor.style.height = `${2 * r}px`;
   }
@@ -1452,7 +1453,9 @@ async function refreshServices(attempt = 0) {
     on: ai.on,
     text: ai.on
       ? `AI suggestions on${ai.fastModel ? ` (${ai.fastModel})` : ""}`
-      : ai.reason === "no-key"
+      : ai.reason === "sign-in"
+        ? "AI suggestions: a caretaker signs in to turn them on. Word prediction works without an account."
+        : ai.reason === "no-key"
         ? "AI suggestions off: the AI server has no API key. Add ANTHROPIC_API_KEY to VisualEyes/.env and restart it."
         : "AI suggestions off: the AI server isn't running (npm run dev:all). Word prediction still works.",
   };
@@ -1531,6 +1534,8 @@ async function startAccount(user: SignedInUser) {
   account = user;
   setSkippedSignIn(localStorage, false);
   setTokenProvider(token); // "My voice" now belongs to this Auth0 user
+  setLlmToken(token); // and AI suggestions are allowed (the deployed site requires a sign-in for them)
+  void refreshServices(1);
   switchProfile(profileFor(user));
   applyProfile(profiles.active);
   void voiceCtl.refresh().then(updateTtsLine);
@@ -1548,6 +1553,7 @@ async function signOut(message?: string) {
   if (account) await prefsSync.flush(); // don't lose a change made in the last second
   account = null;
   setTokenProvider(null);
+  setLlmToken(null);
   if (message) showToast(esc(message), 6000);
   render();
   await auth?.signOut(); // ends the Auth0 session too, then comes back to this page signed out
