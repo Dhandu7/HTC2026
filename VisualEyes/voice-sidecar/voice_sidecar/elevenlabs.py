@@ -75,6 +75,27 @@ def _detail(resp: httpx.Response) -> str:
     return _KEYLIKE.sub("[removed]", text)[:300]
 
 
+#: ElevenLabs' own status codes for a voice that does not exist. It sends these with a 400 as well as a 404,
+#: for example after the voice was deleted in the ElevenLabs dashboard.
+_MISSING_STATUSES = {"voice_not_found", "voice_does_not_exist"}
+_MISSING_MESSAGE = re.compile(r"voice.*(not found|does ?n[o']t exist)", re.I)
+
+
+def _voice_missing(resp: httpx.Response) -> bool:
+    """Does this error say the voice is not there? Checks ElevenLabs' status code and message, not just HTTP 404."""
+    if resp.status_code == 404:
+        return True
+    if resp.status_code not in (400, 422):
+        return False
+    try:
+        d = resp.json().get("detail")
+    except Exception:
+        return False
+    if not isinstance(d, dict):
+        return False
+    return str(d.get("status") or "") in _MISSING_STATUSES or bool(_MISSING_MESSAGE.search(str(d.get("message") or "")))
+
+
 def _raise_for(resp: httpx.Response, what: str) -> None:
     code = resp.status_code
     if code < 400:
@@ -82,7 +103,7 @@ def _raise_for(resp: httpx.Response, what: str) -> None:
     if code in (400, 401, 403, 422) and re.search(r"verif", _detail(resp), re.I):
         # Checked before the generic 401/403 branch: a voice that needs verifying is not a key or plan problem.
         raise VoiceNeedsVerification(f"{what}: ElevenLabs needs this voice verified before it can speak.", 409)
-    if code == 404:
+    if _voice_missing(resp):
         raise RemoteVoiceMissing(f"{what}: not found at ElevenLabs", 404)
     if code in (401, 403):
         d = _detail(resp)
