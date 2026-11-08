@@ -6,7 +6,7 @@
 
 > **Speak with your head and stay part of the conversation.**
 
-**Hack the Change 2026** · Team **P76W26**
+**Hack the Change 2026** · Team ShayP (**P76W26**)
 
 VisualEyes is a webcam-only, conversation-first communicator for people who can't speak or use their hands, such as people living with ALS, cerebral palsy or locked-in syndrome. It runs on any laptop with a webcam. The user looks at a suggested reply, and VisualEyes speaks it aloud. Typing is the mechanism. The conversation is the product.
 
