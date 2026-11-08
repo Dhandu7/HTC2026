@@ -53,11 +53,16 @@ export function headPose(m: ArrayLike<number> | undefined): { yaw: number; pitch
   };
 }
 
+/** Minimum std per feature (same order as `vector`), so near-constant head features can't get huge weights. */
+export const STD_FLOOR = [0, 0, 0, 0, 0.04, 0.04, 0, 0.03, 0.03, 0.03];
+
 export interface GazeFeatures {
-  /** Vector fed to the regressor. The first 4 entries are the gaze-direction terms. */
+  /** Vector fed to the regressor. The first 4 entries are the gaze-direction terms. Length 15; eye modes use the first 10. */
   vector: number[];
   blinkL: number;
   blinkR: number;
+  /** Mean eyeLookDown blendshape (0..1), for diagnostics. */
+  lookDown: number;
   /** Nose x/y and face height (frame fractions) — for head-movement warnings, not regression. */
   headPos: number[];
   /** Mean iris diameter as a fraction of frame width (for distance estimation). */
@@ -81,6 +86,10 @@ export function extractFeatures(
   const irisX = (L.x + (1 - R.x)) / 2;
   const irisY = (L.y - R.y) / 2;
   const nose = lm[LM.noseTip];
+  // Extra head geometry (used by head-pointer mode): where the nose sits relative to the eyes, and the eye midpoint.
+  const eyeMidX = (lm[LM.leftEye.outer].x + lm[LM.rightEye.outer].x) / 2;
+  const eyeMidY = (lm[LM.leftEye.outer].y + lm[LM.rightEye.outer].y) / 2;
+  const eyeDist = Math.hypot((lm[LM.rightEye.outer].x - lm[LM.leftEye.outer].x) * frameAspect, lm[LM.rightEye.outer].y - lm[LM.leftEye.outer].y) || 1e-6;
   const faceH = Math.abs(lm[LM.chin].y - lm[LM.forehead].y) || 1e-6;
   const ringDiam = (ring: readonly number[]) =>
     (Math.hypot((lm[ring[0]].x - lm[ring[2]].x) * frameAspect, lm[ring[0]].y - lm[ring[2]].y) +
@@ -88,13 +97,19 @@ export function extractFeatures(
     2;
   const irisDiameter = (ringDiam(LM.leftEye.irisRing) + ringDiam(LM.rightEye.irisRing)) / 2 / frameAspect;
   return {
-    // Face position/scale are deliberately NOT regressor inputs: they barely vary during calibration,
-    // so z-scoring gives them huge weights and any head shift afterwards throws the cursor across the screen.
-    // (Measured on a real session: held-out error 73 px with them, 61 px without, and far more robust to leaning.)
-    vector: [irisX, irisY, lookH, lookV, pose.yaw, pose.pitch, (L.openness + R.openness) / 2],
+    // Head translation/scale (nose x, nose y, face height as frame fractions) ARE regressor inputs, as the
+    // last 3 entries. They barely vary during the dot calibration, so z-scoring alone gave them huge weights
+    // (a 10.6 deg first run). Two guards: the regressor floors their std (see HEAD_STD_FLOOR), and calibration
+    // adds a "look at a fixed dot while moving your head" phase so the model actually sees head movement.
+    vector: [irisX, irisY, lookH, lookV, pose.yaw, pose.pitch, (L.openness + R.openness) / 2, nose.x, nose.y, faceH,
+      // Indices 10..14: roll, nose-vs-eyes geometry (x, y), eye midpoint (x, y). Only head-pointer mode uses these.
+      pose.roll, ((nose.x - eyeMidX) * frameAspect) / eyeDist, (nose.y - eyeMidY) / eyeDist, eyeMidX, eyeMidY],
     headPos: [nose.x, nose.y, faceH],
-    blinkL: g("eyeBlinkLeft"),
-    blinkR: g("eyeBlinkRight"),
+    // Looking down lowers the eyelids, which raises the raw blink score without a blink. Subtract the
+    // look-down part so downward gaze isn't mistaken for a blink (that froze the cursor on the bottom row).
+    blinkL: Math.max(0, g("eyeBlinkLeft") - 0.6 * g("eyeLookDownLeft")),
+    blinkR: Math.max(0, g("eyeBlinkRight") - 0.6 * g("eyeLookDownRight")),
+    lookDown: (g("eyeLookDownLeft") + g("eyeLookDownRight")) / 2,
     irisDiameter,
   };
 }

@@ -52,8 +52,12 @@ export class GazeRegressor {
   trained = false;
 
   constructor(
-    private readonly lambda = 1.0,
+    public lambda = 1.0,
     private readonly quadCount = 4,
+    /** Per-feature lower bound on the z-score std (same order as the feature vector). */
+    private readonly stdFloor: Vec = [],
+    /** Per-feature multiplier on the ridge penalty (same order as the feature vector). >1 = trust less. */
+    public penaltyScale: Vec = [],
   ) {}
 
   fit(samples: Sample[]): void {
@@ -64,7 +68,7 @@ export class GazeRegressor {
     for (const s of samples) s.features.forEach((v, i) => (this.mean[i] += v / samples.length));
     for (const s of samples)
       s.features.forEach((v, i) => (this.std[i] += (v - this.mean[i]) ** 2 / samples.length));
-    this.std = this.std.map((v) => Math.sqrt(v) || 1);
+    this.std = this.std.map((v, i) => Math.max(Math.sqrt(v), this.stdFloor[i] ?? 0) || 1);
 
     const rows = samples.map((s) => expand(this.normalize(s.features), this.quadCount));
     const k = rows[0].length;
@@ -80,7 +84,8 @@ export class GazeRegressor {
       }
     });
     // Don't regularise the intercept.
-    for (let i = 1; i < k; i++) XtX[i][i] += this.lambda;
+    // Column i (i>=1) is z-feature i-1 for i<=d, then quadratic terms (scale 1).
+    for (let i = 1; i < k; i++) XtX[i][i] += this.lambda * (i <= d ? (this.penaltyScale[i - 1] ?? 1) : 1);
     this.wx = solve(XtX, Xty);
     this.wy = solve(XtX, Xtx2);
     this.trained = true;
@@ -99,6 +104,48 @@ export class GazeRegressor {
   }
 
   private normalize(f: Vec): Vec {
-    return f.map((v, i) => (v - this.mean[i]) / this.std[i]);
+    // Clamp: the quadratic terms explode if a feature drifts well outside what calibration saw.
+    return f.map((v, i) => Math.max(-4, Math.min(4, (v - this.mean[i]) / this.std[i])));
   }
+}
+
+/**
+ * Pick the ridge strength by leave-one-dot-out cross-validation: fit without one dot's samples, measure the
+ * error on that dot, and keep the lambda with the lowest median held-out error. Needs the samples to carry
+ * exact target coordinates (a dot = a unique x,y).
+ */
+export function chooseLambda(
+  samples: Sample[],
+  quadCount: number,
+  stdFloor: Vec,
+  penaltyScale: Vec = [],
+  lambdas = [0.1, 0.3, 1, 3, 10, 30],
+): { lambda: number; medianErrPx: number } {
+  const groups = new Map<string, Sample[]>();
+  for (const s of samples) {
+    const k = `${s.x},${s.y}`;
+    (groups.get(k) ?? groups.set(k, []).get(k)!).push(s);
+  }
+  const keys = [...groups.keys()];
+  let best = { lambda: 1, medianErrPx: Infinity };
+  if (keys.length < 6) return best;
+  for (const lambda of lambdas) {
+    const errs: number[] = [];
+    for (const k of keys) {
+      const train = samples.filter((s) => `${s.x},${s.y}` !== k);
+      if (train.length < 8) continue;
+      const m = new GazeRegressor(lambda, quadCount, stdFloor, penaltyScale);
+      m.fit(train);
+      const held = groups.get(k)!;
+      const e = held.map((h) => {
+        const q = m.predict(h.features);
+        return Math.hypot(q.x - h.x, q.y - h.y);
+      });
+      errs.push(e.reduce((a, b) => a + b, 0) / e.length);
+    }
+    errs.sort((a, b) => a - b);
+    const med = errs[Math.floor(errs.length / 2)];
+    if (med < best.medianErrPx) best = { lambda, medianErrPx: med };
+  }
+  return best;
 }
