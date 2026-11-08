@@ -1,4 +1,4 @@
-# GazeType
+# VocalEyes
 
 A webcam-only eye-gaze communicator for people who can't use their hands or voice (ALS, cerebral palsy, locked-in syndrome). It needs no infrared tracker and runs on any laptop. Typing is prediction-first, the targets are large enough for webcam error, and all vision processing stays on the device.
 
@@ -52,9 +52,9 @@ webcam ─► MediaPipe Face Landmarker (478 landmarks + blendshapes + face pose
 | Calibration | `src/ui/calibration.ts` | 9 calibration points and 4 validation points take about 25 s. Reports **mean error and precision in degrees**, with the assumed screen size and distance shown. |
 | Drift | `src/gaze/engine.ts` | **Implicit recalibration**: a selection that isn't undone within 2 s becomes a down-weighted training sample at the target's centre. |
 | Accuracy units | `src/gaze/accuracy.ts` | Converts px to degrees. Viewing distance is estimated from iris size (11.7 mm) and can be overridden. |
-| Selection | `src/input/selection.ts` | **Dwell** (700 ms on GazeType, 1000 ms on the baseline). **Deliberate blink** (dwell-free) needs both eyes closed for 350–1500 ms after aiming for at least 150 ms. Involuntary blinks are **counted and reported**, not hidden. |
+| Selection | `src/input/selection.ts` | **Dwell** (700 ms on the VocalEyes keyboard, 1000 ms on the baseline). **Deliberate blink** (dwell-free) needs both eyes closed for 350–1500 ms after aiming for at least 150 ms. Involuntary blinks are **counted and reported**, not hidden. |
 | Home | `src/ui/keyboards.ts` | The app opens on **6 large chips (3×2)**: 5 ready-to-speak phrases (one selection speaks a message) and **⌨ Keyboard**, which opens the 4×4 grid. Recorded pointer sessions hit 6 large buttons far more often than the 16-key grid (mean 59% vs 32%). Phrases come from a pluggable source (`homeSource`) so the conversation engine can supply replies. **🗑 Clear** (top bar, or ☰ Done → 🏠 Home) clears the text and returns here. Benchmarks skip it. |
-| Keyboard | `src/ui/keyboards.ts` | GazeType has **16 targets in a 4×4 grid**: 4 prediction chips, 8 letter-group keys, delete, accept, phrases/expand, and done. The baseline is a dwell QWERTY. |
+| Keyboard | `src/ui/keyboards.ts` | The VocalEyes keyboard has **16 targets in a 4×4 grid**: 4 prediction chips, 8 letter-group keys, delete, accept, phrases/expand, and done. The baseline is a dwell QWERTY. |
 | Prediction | `src/predict/engine.ts` | Decodes ambiguous letter-group keys through a **key-sequence index** (one bucket lookup per key, ~0.4 ms), completes words, and predicts the next word from personal **trigram → bigram** context. Personal and global frequencies are blended, with the personal share growing as the user talks; personal words decay over 30 days; a suggestion picked and deleted within 2 s is ranked lower in that context. Keeps a **personal phrase store** that learns every sentence you speak or insert. **Abbreviation expansion** turns one key per word into a full sentence. |
 | Profiles | `src/profile/profiles.ts` | Each user has separate words, phrases and calibration. A caregiver can add **people's names** (pinned, keep their capitals), an **about** note, and **writing samples** (pasted text or a .txt file) that give prediction a head start. Switch user by gaze from **☰ Done → 👤 Switch user**. Export/import a profile as JSON. All on-device. |
 | LLM (optional) | `server/llm.ts` | Claude via a local proxy with structured output. Live sentence chips use a fast model (`GAZETYPE_FAST_MODEL`, default `claude-haiku-5-5`, no thinking); the abbreviation-expansion panel uses `GAZETYPE_MODEL` (default `claude-opus-5-5`). The profile goes in a cached system block so suggestions match the user's style. Requests are debounced 150 ms, cancelled when the text changes, cached by typed text, and time out after 2.5 s (6 s for expansion). Only text is sent, never video. |
@@ -70,7 +70,7 @@ Tracking changes are judged on recorded data, averaged over **all** recordings, 
 1. Start the **🎯 Pointer tracker** (or 👁 Eye tracker) and press **● Record**. The recording follows the active mode. Use one Participant ID per person.
    - **Quick trial (~1.5 min):** 25-dot grid + 8 check dots. In pointer mode the check dots stay up 3.5 s so the 2 s dwell can be simulated.
    - **Full (~12 min):** adds 16 check dots and drift checks at +2, +5, +10 min. **Short:** 9 dots + 16 check dots, for strangers.
-2. Every **◎ Calibrate** also downloads `gazecal-<pointer|eye>-<id>-<time>.json` when "Save each calibration" is on in ⚙ Settings (default on). The calibration toast now also shows the **hit rate for 6 large buttons and for the 4×4 grid** on the check dots.
+2. Every **◎ Calibrate** also downloads `gazecal-<pointer|eye>-<id>-<time>.json` when "Save each calibration" is on in ⚙ Settings (default on). The calibration toast now also shows the **hit rate for 6 large buttons and for the 4×4 grid** on the check dots (or a warning to recalibrate if the face was lost on half the check dots). In pointer mode the 4 check dots stay up 3.5 s, so every calibration also gives dwell-simulation data.
 3. Move the files to `VisualEyes/recordings/` (git-ignored) and run `npm run replay -- recordings/*.json` (`--json out.json` saves the rows). It rebuilds the features from the raw landmarks and fits **exactly the app's model** for each file's mode (pointer: yaw + pitch, straight-line ridge, λ=1, per-dot outlier trimming; eye: 7 features, ridge λ=1). Pointer recordings are also scored with the **original** 10-feature quadratic model, side by side, with a "beats original on N of M" count, so the model choice keeps being checked against data. It prints per recording and as a **mean per pointer mode**:
    - hit rates (4-chip, 6-chip, 16-grid), x/y offset, jitter, on the held-out check dots and drift checks;
    - a **dwell simulation** with main's cursor pipeline (pointer: smoothing, clamp, 10 px leash, off-screen cut-off) and 2 s dwell: correct / wrong / timed out.
@@ -83,7 +83,7 @@ The best webcam gaze estimates have about 1.3–1.8° error. A typical student i
 ## Demo script (side-by-side)
 
 1. **Calibrate** (about 25 s). Read out the measured error in degrees and the stated conditions.
-2. Turn on **⏱ Benchmark**. Type the target sentence on **GazeType** with your eyes.
+2. Turn on **⏱ Benchmark**. Type the target sentence on the **VocalEyes** keyboard.
 3. Toggle **Keyboard → Baseline QWERTY**. The same sentence stays loaded. Type it again.
 4. Open **📊 Results**. Compare WPM, selections per character, error and false selections. **Export JSON** for the slide.
 5. Type a sentence and speak it. Then start it again: it now comes back as a **phrase chip** after one word, so the store is learning.

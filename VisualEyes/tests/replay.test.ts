@@ -93,3 +93,16 @@ describe("replay, pointer tracker", () => {
     expect(buttonsAround(750, 450, 1500, 900, { name: "6", cols: 3, rows: 2 }, 0).some((r) => r.id === "0,0")).toBe(true);
   });
 });
+
+describe("tracking loss", async () => {
+  const { trackingLost } = await import("../src/eval/replay");
+  it("flags a session whose face vanished on half the check dots, and keeps a clean one", () => {
+    const raw = fakeSession("h", "quick", { gain: 1, bias: 0 }, 3, "pointer");
+    expect(trackingLost(prepare(raw, "clean"))).toBe(false);
+    const valIdx = raw.targets.map((t, i) => (t.segment === "val" ? i : -1)).filter((i) => i >= 0).slice(0, 4);
+    const broken = { ...raw, frames: raw.frames.map((f) => (valIdx.includes(f.ti) ? { ...f, lm: null, bs: null } : f)) };
+    const s = prepare(broken, "broken");
+    expect(s.lostCheckDots).toBe(4);
+    expect(trackingLost(s)).toBe(true);
+  });
+});

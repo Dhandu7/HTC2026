@@ -22,6 +22,12 @@ const VAL_POINTS: [number, number][] = [
 const SETTLE_MS = 700;
 const COLLECT_MS = 1300;
 const DOT_MS = SETTLE_MS + COLLECT_MS;
+/**
+ * Pointer mode: check dots stay up 3.5 s (700 ms settle + 2.8 s collection) instead of 2 s, so
+ * a 2 s dwell fits inside each one. Every calibration then also yields dwell-simulation data
+ * (npm run replay), and the hit rate rests on ~2x the frames. Adds ~6 s.
+ */
+export const POINTER_CHECK_COLLECT_MS = 2800;
 const fmt = (s: number) => (s >= 60 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s` : `${Math.round(s)} s`);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -57,7 +63,18 @@ function trimOutliers(fs: FaceFrame[]): FaceFrame[] {
  * the check dots) and the distance-independent hit rates: share of check-dot frames inside a
  * button-sized box for a 6-button (3x2) and a 16-button (4x4) layout.
  */
-export type CalResult = ErrorStats & { dirX: number; dirY: number; hit6: number; hit16: number };
+export type CalResult = ErrorStats & {
+  dirX: number;
+  dirY: number;
+  hit6: number;
+  hit16: number;
+  /** Check dots where the face was (mostly) not found: the accuracy numbers can't be trusted. */
+  lostCheckDots: number;
+  checkDots: number;
+};
+
+/** A check dot "lost" the face if fewer than this many usable frames came in (~26 is normal). */
+export const MIN_CHECK_FRAMES = 8;
 
 const corr = (a: number[], b: number[]) => {
   const n = a.length;
@@ -87,9 +104,13 @@ export async function runCalibration(
   const bar = root.querySelector<HTMLElement>(".cal-bar i")!;
   const progText = root.querySelector<HTMLElement>(".cal-progress span")!;
   const totalDots = CAL_POINTS.length + VAL_POINTS.length;
+  const checkCollectMs = engine.isPointer ? POINTER_CHECK_COLLECT_MS : COLLECT_MS;
+  const checkDotMs = SETTLE_MS + checkCollectMs;
+  const remainingMs = (done: number) =>
+    Math.max(0, CAL_POINTS.length - done) * DOT_MS + Math.min(VAL_POINTS.length, totalDots - Math.max(done, CAL_POINTS.length)) * checkDotMs;
   const showProgress = (done: number, label: string) => {
     bar.style.width = `${(done / totalDots) * 100}%`;
-    progText.textContent = `${label} · dot ${Math.min(done + 1, totalDots)} of ${totalDots} · about ${fmt((totalDots - done) * (DOT_MS / 1000))} left`;
+    progText.textContent = `${label} · dot ${Math.min(done + 1, totalDots)} of ${totalDots} · about ${fmt(remainingMs(done) / 1000)} left`;
   };
   let frames: FaceFrame[] = [];
   let collecting = false;
@@ -111,20 +132,22 @@ export async function runCalibration(
   };
 
   const collectAt = async (p: [number, number], segment: "cal" | "val" = "cal") => {
+    const collectMs = segment === "val" ? checkCollectMs : COLLECT_MS;
     tape?.show(segment, p[0], p[1]);
     place(p);
+    dot.style.animationDuration = `${(SETTLE_MS + collectMs) / 1000}s`;
     await sleep(SETTLE_MS);
     frames = [];
     collecting = true;
     tape?.collectStart();
-    await sleep(COLLECT_MS);
+    await sleep(collectMs);
     collecting = false;
     tape?.collectEnd();
     return frames;
   };
 
   try {
-    msg.innerHTML = `${message}<br><br><b>Calibration needs ${CAL_POINTS.length} dots + ${VAL_POINTS.length} check dots, about ${fmt(totalDots * (DOT_MS / 1000))}.</b><br>Each dot takes ${DOT_MS / 1000} seconds. Press Esc to cancel.`;
+    msg.innerHTML = `${message}<br><br><b>Calibration needs ${CAL_POINTS.length} dots + ${VAL_POINTS.length} check dots, about ${fmt(remainingMs(0) / 1000)}.</b><br>Each dot takes ${DOT_MS / 1000} seconds${checkDotMs !== DOT_MS ? ` (check dots ${checkDotMs / 1000} s)` : ""}. Press Esc to cancel.`;
     showProgress(0, "Starting");
     await sleep(3500);
     msg.textContent = "";
@@ -174,10 +197,13 @@ export async function runCalibration(
 
     msg.textContent = "Checking accuracy…";
     const val: { target: { x: number; y: number }; samples: { x: number; y: number }[] }[] = [];
+    let lostCheckDots = 0;
     for (const [i, p] of VAL_POINTS.entries()) {
       if (cancelled) return null;
       showProgress(CAL_POINTS.length + i, "Checking accuracy");
-      const fs = trimOutliers(await collectAt(p, "val"));
+      const raw = await collectAt(p, "val");
+      if (raw.length < MIN_CHECK_FRAMES) lostCheckDots++;
+      const fs = trimOutliers(raw);
       val.push({ target: { x: p[0] * innerWidth, y: p[1] * innerHeight }, samples: fs.map((f) => engine.predictRaw(f.vector)) });
     }
     const stats = summarizeErrors(val, geometry());
@@ -187,7 +213,7 @@ export async function runCalibration(
     const dirX = have.length >= 3 ? corr(have.map((v) => meanOf(v, "x")), have.map((v) => v.target.x)) : NaN;
     const dirY = have.length >= 3 ? corr(have.map((v) => meanOf(v, "y")), have.map((v) => v.target.y)) : NaN;
     const hits = evaluate(val.map((v) => ({ target: v.target, preds: v.samples })), innerWidth, innerHeight, geometry()).hitRate;
-    return { ...stats, dirX, dirY, hit6: hits["6-chip (3x2)"], hit16: hits["16-grid (4x4)"] };
+    return { ...stats, dirX, dirY, hit6: hits["6-chip (3x2)"], hit16: hits["16-grid (4x4)"], lostCheckDots, checkDots: VAL_POINTS.length };
   } finally {
     off();
     window.removeEventListener("keydown", onKey);

@@ -163,7 +163,7 @@ function render() {
   output.innerHTML = kb.displayHtml();
   rectsDirty = true;
   document.body.dataset.kb = kb.name;
-  $("#kb-toggle").textContent = kb === gazeKb ? "Keyboard: GazeType" : "Keyboard: Baseline QWERTY";
+  $("#kb-toggle").textContent = kb === gazeKb ? "Keyboard: VocalEyes" : "Keyboard: Baseline QWERTY";
 }
 function measure() {
   if (!rectsDirty) return;
@@ -246,7 +246,7 @@ const targetEl = (id: string) =>
 
 function applySelection(id: string, t: number) {
   const el = targetEl(id);
-  // Top-bar Clear = the keyboard's own clear action (GazeType clears and resets; baseline goes via doAction).
+  // Top-bar Clear = the keyboard's own clear action (VocalEyes keyboard clears and resets; baseline goes via doAction).
   const kind = kb.select(id === "top:clear" ? "act:clear" : id);
   rec.event("select", { id, kind });
   if (kind === "delete" && pendingImplicit) {
@@ -599,6 +599,14 @@ async function calibrate() {
   lastError = stats;
   rec.event("calibrated", { model: pointerTracking ? "pointer" : "eye", error: stats, samples: gaze.calibrationSamples.length });
   const g = geometry();
+  // Face lost during the check: the numbers below would be fake, so say so instead.
+  if (stats.lostCheckDots * 2 >= stats.checkDots) {
+    showToast(
+      `<b style="color:#ff7b72">⚠ Face not found during the accuracy check</b> (${stats.lostCheckDots} of ${stats.checkDots} check dots). The calibration may be fine, but it couldn't be measured. Stay in view of the camera and press <b>◎ Calibrate</b> again.`,
+      15000,
+    );
+    return;
+  }
   const weakDir = !(stats.dirX > 0.7 && stats.dirY > 0.7);
   showToast(
     `${weakDir ? `<b style="color:#ff7b72">⚠ Direction check failed</b> (pointer follows your target with correlation x ${stats.dirX.toFixed(2)}, y ${stats.dirY.toFixed(2)}; it should be above 0.7). This calibration may move the pointer the wrong way. Press ◎ Calibrate again.<br>` : ""}<b>Calibrated.</b> Hit rate on check dots: <b>${Math.round(
@@ -752,7 +760,7 @@ function startRun(index: number) {
   kb.clear();
   session = new TypingSession(kb.name, gaze.source === "mouse" ? `${settings.selectionMode}+mouse` : settings.selectionMode, target);
   targetBar.hidden = false;
-  targetBar.innerHTML = `Type: <b>${target}</b> <small>(timer starts on first selection · ${kb === gazeKb ? "GazeType" : "Baseline"})</small> <button id="next-sentence" type="button">⏭ Next sentence</button>`;
+  targetBar.innerHTML = `Type: <b>${target}</b> <small>(timer starts on first selection · ${kb === gazeKb ? "VocalEyes" : "Baseline"})</small> <button id="next-sentence" type="button">⏭ Next sentence</button>`;
   $("#next-sentence").addEventListener("click", () => startRun(++benchIndex));
   blink.accepted = blink.rejectedShort = blink.rejectedLong = 0;
   render();

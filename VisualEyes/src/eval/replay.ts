@@ -7,7 +7,7 @@ import { GazeRegressor, type Sample } from "../gaze/regression";
 import { POINTER_FLOOR, SIMPLE_POINTER, SIMPLE_POINTER_FLOOR, simplePointerInput, type PointerModel } from "../gaze/engine";
 import { chooseLambda } from "../gaze/regression";
 import { eyeVector, pointerVector } from "../gaze/features";
-import { trimOutlierIdx } from "../ui/calibration";
+import { MIN_CHECK_FRAMES, trimOutlierIdx } from "../ui/calibration";
 import { frameFeatures, pointKey, type PointerMode, type RecordedSession } from "../record/format";
 import { EYE_DWELL, POINTER_DWELL, simulateDwell, type DwellStats } from "./dwell";
 import { LAYOUTS, evaluate, type EvalStats, type PointPredictions, type XY } from "./metrics";
@@ -39,7 +39,12 @@ export interface PreparedSession {
   drift: Map<number, PreparedPoint[]>;
   /** Fraction of collection frames with no face (or, in eye mode, closed eyes). */
   lostFrac: number;
+  /** Check dots with fewer than 8 usable frames (face lost): if half or more, the session is unusable. */
+  lostCheckDots: number;
 }
+
+/** Same rule as the app (MIN_CHECK_FRAMES in calibration.ts): half or more check dots lost = don't score. */
+export const trackingLost = (s: PreparedSession) => s.val.length > 0 && s.lostCheckDots * 2 >= s.val.length;
 
 export interface PrepareOptions {
   /** Score with the pointer pipeline even if the file was recorded in eye mode (plumbing tests). */
@@ -100,6 +105,7 @@ export function prepare(session: RecordedSession, name: string, opts: PrepareOpt
     val,
     drift,
     lostFrac: total ? lost / total : NaN,
+    lostCheckDots: val.filter((p) => p.vectors.length < MIN_CHECK_FRAMES).length,
   };
 }
 

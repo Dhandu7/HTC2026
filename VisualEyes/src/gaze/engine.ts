@@ -66,6 +66,11 @@ export class GazeEngine {
   private regressor = new GazeRegressor(1.0, 4);
   private filter = new PointFilter(0.8, 0.015);
   private pointerMode = false;
+
+  /** True once configurePointer() has been called (pointer-tracker mode). */
+  get isPointer() {
+    return this.pointerMode;
+  }
   // Pointer tracker only: ignore wobble smaller than this many px, and trail the true point by that much when moving.
   private anchor: { x: number; y: number } | null = null;
   private stillRadiusPx = POINTER_STILL_RADIUS_PX;

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>GazeType</title>
+    <title>VocalEyes</title>
   </head>
   <body>
     <div id="app">
@@ -12,7 +12,7 @@
         <button id="clear-btn" class="key ctrl" data-target="top:clear" type="button" title="Clear the typed text (one step, also by dwell)"><span class="lbl">🗑 Clear</span></button>
         <nav id="controls">
           <button id="profile-btn" type="button">👤</button>
-          <button id="kb-toggle" type="button">Keyboard: GazeType</button>
+          <button id="kb-toggle" type="button">Keyboard: VocalEyes</button>
           <button id="bench-btn" type="button">⏱ Benchmark</button>
           <button id="results-btn" type="button">📊 Results</button>
           <button id="recal" type="button">◎ Calibrate</button>
@@ -31,7 +31,7 @@
 
     <section id="home">
       <div class="home-card">
-        <h1>GazeType</h1>
+        <h1>VocalEyes</h1>
         <p>Type with your eyes using any webcam. Prediction-first, large targets, on-device.</p>
         <div class="home-actions">
           <button id="start-camera" class="primary" type="button">👁 Eye tracker</button>
@@ -55,7 +55,7 @@
     <div id="gaze-hint" role="status" hidden></div>
     <div id="position-hint" role="status" hidden></div>
     <div id="toast" hidden></div>
-    <div id="pill" title="GazeType"><span>👁</span></div>
+    <div id="pill" title="VocalEyes"><span>👁</span></div>
     <video id="video" playsinline muted></video>
 
     <dialog id="record">
@@ -90,7 +90,7 @@
             <option value="click">Click only</option>
           </select>
         </label>
-        <label>GazeType dwell (ms) <input name="dwellMs" type="number" min="200" max="3000" step="50" /></label>
+        <label>VocalEyes dwell (ms) <input name="dwellMs" type="number" min="200" max="3000" step="50" /></label>
         <label>Baseline dwell (ms) <input name="baselineDwellMs" type="number" min="200" max="3000" step="50" /></label>
         <label><input name="baselinePrediction" type="checkbox" /> Word prediction on baseline keyboard</label>
         <label>Screen diagonal (in) <input name="screenDiagonalIn" type="number" min="7" max="40" step="0.1" /></label>

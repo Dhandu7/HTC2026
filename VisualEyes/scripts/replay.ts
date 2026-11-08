@@ -5,7 +5,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { SESSION_FORMAT, type RecordedSession } from "../src/record/format";
-import { accuracyRows, dwellRows, prepare, type DwellRow, type ResultRow } from "../src/eval/replay";
+import { accuracyRows, dwellRows, prepare, trackingLost, type DwellRow, type ResultRow } from "../src/eval/replay";
 
 const args = process.argv.slice(2);
 const jsonIdx = args.indexOf("--json");
@@ -29,12 +29,14 @@ for (const s of sessions) {
   console.log(
     `• ${s.name}: ${m.participant}, ${s.pointer} mode${s.pointer !== s.recordedPointer ? ` (recorded as ${s.recordedPointer})` : ""}, ${m.mode}, ` +
       `${s.cal.length} cal + ${s.val.length} check dots, ${s.session.env.screenWidth}x${s.session.env.screenHeight}, ` +
-      `${(s.lostFrac * 100).toFixed(1)}% frames lost`,
+      `${(s.lostFrac * 100).toFixed(1)}% frames lost` +
+      (trackingLost(s) ? `  ⚠ EXCLUDED: face lost on ${s.lostCheckDots} of ${s.val.length} check dots` : ""),
   );
 }
+const scored = sessions.filter((s) => !trackingLost(s));
 
-const acc = sessions.flatMap(accuracyRows);
-const dwell = sessions.flatMap(dwellRows);
+const acc = scored.flatMap(accuracyRows);
+const dwell = scored.flatMap(dwellRows);
 const f1 = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : "–");
 const f0 = (n: number) => (Number.isFinite(n) ? n.toFixed(0) : "–");
 const pct = (n: number) => (Number.isFinite(n) ? `${(n * 100).toFixed(0)}%` : "–");
