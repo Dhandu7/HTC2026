@@ -77,13 +77,13 @@ console.table(
     layout: r.layout,
     "correct": pct(r.stats.correct),
     "wrong": pct(r.stats.wrong),
-    "none (≤2.3 s)": pct(r.stats.none),
+    "none (dot gone)": pct(r.stats.none),
     "time to select": Number.isFinite(r.stats.meanTimeMs) ? `${(r.stats.meanTimeMs / 1000).toFixed(2)} s` : "–",
     dots: r.stats.n,
   })),
 );
 console.log(
-  "\ndwell: did looking at a dot select the button centred on it? 'none' = nothing selected before the dot vanished (2.3 s after it appeared, incl. eye travel)." +
+  "\ndwell: did looking at a dot select the button centred on it? 'none' = nothing selected before the dot vanished (2.3 s after it appeared in recordings, 1.9 s in saved calibrations, incl. eye travel)." +
     "\nacc = offset of mean gaze from target; prec SD = spread around that mean; S2S = frame-to-frame jitter." +
     "\nhit = share of frames inside a cell-sized box centred on the target (distance-independent: the main metric)." +
     "\n° figures depend on the estimated viewing distance and the screen-size setting. Bars: 6-chip ≥95% hits (≈≤1.5°), 16-grid ≥90% (≈≤1.0°).",

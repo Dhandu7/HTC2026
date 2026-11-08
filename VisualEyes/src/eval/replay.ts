@@ -4,6 +4,7 @@
 import { estimateDistanceCm, type ViewingGeometry } from "../gaze/accuracy";
 import { GazeRegressor, type Sample } from "../gaze/regression";
 import { KernelGazeRegressor } from "../gaze/kernel";
+import { kernelInput } from "../gaze/features";
 import { APP_DWELL, OLD_DWELL, simulateDwell, type DwellStats } from "./dwell";
 import { medianPose, poseDeviation, poseOf, type PoseRef } from "../gaze/engine";
 import { APP_9, APP_13, CORNERS_5, frameFeatures, pointKey, type RecordedSession } from "../record/format";
@@ -124,13 +125,17 @@ export function ridge(points: PreparedPoint[], lambda: number): Predictor | null
   return (f) => r.predict(f);
 }
 
-/** RBF kernel ridge; γ=0.03, λ=1 was the best overall setting on the first three recordings. */
-export function kernel(points: PreparedPoint[], lambda = 1, gamma = 0.03): Predictor | null {
-  const samples = toSamples(points);
+/**
+ * RBF kernel ridge as the app uses it: γ=0.03, λ=1 (best overall on the first recordings),
+ * on KERNEL_FEATURES (head pitch left out). Pass `allFeatures` to use the full vector.
+ */
+export function kernel(points: PreparedPoint[], lambda = 1, gamma = 0.03, allFeatures = false): Predictor | null {
+  const sel = allFeatures ? (v: number[]) => v : kernelInput;
+  const samples = toSamples(points).map((s) => ({ ...s, features: sel(s.features) }));
   if (samples.length < 8) return null;
   const k = new KernelGazeRegressor(lambda, gamma, 400);
   k.fit(samples);
-  return (f) => k.predict(f);
+  return (f) => k.predict(sel(f));
 }
 
 export function score(s: PreparedSession, points: PreparedPoint[], predict: Predictor): EvalStats {
@@ -200,7 +205,7 @@ export function personalRows(s: PreparedSession): ResultRow[] {
     }
   for (const set of sets) {
     const p = kernel(calPoints(s, set));
-    if (p) rows.push({ section: "personal", session: s.name, participant: s.participant, source: "kernel γ=0.03 λ=1", calSet: set, testSet: "val", stats: score(s, s.val, p) });
+    if (p) rows.push({ section: "personal", session: s.name, participant: s.participant, source: "kernel (app, no pitch)", calSet: set, testSet: "val", stats: score(s, s.val, p) });
   }
   return rows;
 }

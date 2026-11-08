@@ -53,6 +53,15 @@ export function headPose(m: ArrayLike<number> | undefined): { yaw: number; pitch
   };
 }
 
+/**
+ * Which entries of `vector` the kernel model uses: everything except head pitch (index 5).
+ * On five recorded sessions, dropping pitch raised 6-chip hits on 4 of 5 (mean 81% -> 83%)
+ * and cut vertical error on 4 of 5; dropping yaw too made things much worse (71%).
+ * Pitch stays in `vector` for the posture guard.
+ */
+export const KERNEL_FEATURES = [0, 1, 2, 3, 4, 6] as const;
+export const kernelInput = (v: number[]) => KERNEL_FEATURES.map((i) => v[i]);
+
 export interface GazeFeatures {
   /** Vector fed to the regressor. The first 4 entries are the gaze-direction terms. */
   vector: number[];

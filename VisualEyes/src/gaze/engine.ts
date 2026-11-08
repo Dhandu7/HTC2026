@@ -2,6 +2,7 @@
 // gaze point. Owns calibration data and implicit recalibration.
 import { GazeRegressor, type Sample } from "./regression";
 import { KernelGazeRegressor } from "./kernel";
+import { kernelInput } from "./features";
 
 export type GazeModel = "kernel" | "ridge";
 
@@ -265,12 +266,12 @@ export class GazeEngine {
 
   private refit() {
     const all = [...this.calSamples, ...this.implicit];
-    if (all.length >= 8) this.regressor.fit(all);
+    if (all.length >= 8) this.regressor.fit(this.model === "kernel" ? all.map((s) => ({ ...s, features: kernelInput(s.features) })) : all);
     this.filter.reset();
   }
 
   /** Predict without smoothing (used by validation). */
   predictRaw(features: number[]) {
-    return this.regressor.predict(features);
+    return this.regressor.predict(this.model === "kernel" ? kernelInput(features) : features);
   }
 }

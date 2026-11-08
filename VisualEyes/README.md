@@ -40,7 +40,7 @@ On macOS the overlay asks for Camera access. Auto-paste needs **Accessibility** 
 ```
 webcam ─► MediaPipe Face Landmarker (478 landmarks + blendshapes + head pose, on-device, ~30 fps)
         ─► features: iris-in-eye (x,y), eyeLook blendshapes, head yaw/pitch, face position/scale
-        ─► kernel ridge (RBF on z-scored features; quadratic ridge selectable) fit by 25-point calibration
+        ─► kernel ridge (RBF on z-scored features, head pitch left out; quadratic ridge selectable) fit by 25-point calibration
         ─► One Euro filter ─► target tracker (snap + hysteresis) ─► dwell | deliberate-blink selector
         ─► keyboard ─► prediction engine (+ optional LLM) ─► speak / insert / learn
 ```
