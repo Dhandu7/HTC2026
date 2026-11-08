@@ -106,7 +106,7 @@ export function mountMyVoice(d: MyVoiceDeps): { open(): void } {
       { class: "mv-conn" },
       h("summary", {}, "Connection"),
       h("label", {}, "Voice service address ", url),
-      h("p", { class: "fine" }, d.usingDevLogin() ? `Sign-in is not set up yet, so this uses a test login (${s.devUserId}), which only works with a service on this computer.` : "Signed in."),
+      h("p", { class: "fine" }, d.usingDevLogin() ? `You are not signed in, so this uses a test login (${s.devUserId}), which only works with a service on this computer. Sign in from the start screen to keep your voice with your account.` : "Signed in."),
       h("button", { type: "button", onclick: () => { d.saveApiSettings({ ...s, baseUrl: url.value.trim() }); void controller.refresh(); } }, "Save and reconnect"),
     );
   }

@@ -41,6 +41,7 @@
           <label>Typing as <select id="profile-select"></select></label>
           <button id="profile-manage" type="button">Edit profiles</button>
         </div>
+        <p class="home-account"><span id="account-line"></span> <button id="account-btn" type="button">Sign in</button></p>
         <p id="llm-status" class="llm-status">Checking AI suggestions…</p>
         <p id="tts-status" class="llm-status">Checking voice…</p>
         <p class="home-msg"></p>
@@ -48,6 +49,8 @@
         <p class="fine" id="shortcut-hint"></p>
       </div>
     </section>
+
+    <section id="auth" aria-label="Sign in" hidden></section>
 
     <div id="calibration" hidden></div>
     <div id="cursor" hidden></div>

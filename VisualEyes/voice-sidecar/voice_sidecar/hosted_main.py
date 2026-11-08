@@ -17,7 +17,9 @@ ELEVENLABS_MODEL_ID       eleven_flash_v2_5          default model for new voice
 ELEVENLABS_OUTPUT_FORMAT  mp3_44100_128              audio format returned by /speak
 VOICE_SLOT_LIMIT          10                         the ElevenLabs plan's custom-voice cap (Starter 10, Creator 30, Pro 160)
 SPEAK_PER_MINUTE          60                         per-user rate limit on /speak (0 = off)
-AUTH_MODE                 jwt                        jwt | dev (dev only on a loopback address)
+AUTH_MODE                 jwt                        auth0 | jwt | dev (dev only on a loopback address)
+AUTH0_DOMAIN              -                          auth0: your tenant, e.g. vocaleyes.us.auth0.com
+AUTH0_AUDIENCE            -                          auth0: the API Identifier from Auth0 > Applications > APIs
 JWT_ISSUER, JWT_AUDIENCE, JWT_JWKS_URL               for jwt (JWKS defaults to <issuer>/.well-known/jwks.json)
 HOST, PORT                127.0.0.1, 8790            listen address
 CORS_ORIGINS              (none)                     comma-separated browser origins allowed to call the API
@@ -30,7 +32,8 @@ import os
 import sys
 from typing import Optional
 
-from .auth import DevAuth, JwtAuth
+from .auth import DevAuth, FirstOf, JwtAuth
+from .users import Auth0UserInfo, DynamoUserStore, MemoryUserStore, UserService
 from .elevenlabs import DEFAULT_BASE_URL, ElevenLabsClient, key_shape_warning
 from .hosted import HostedConfig, HostedVoiceService
 from .hosted_app import create_hosted_app
@@ -79,14 +82,40 @@ def build_store(env=os.environ):
     return DynamoRecordStore(table, region=env.get("AWS_REGION"))
 
 
-def build_auth(env=os.environ, host: str = "127.0.0.1"):
+def auth0_settings(env=os.environ) -> "tuple[str, str]":
+    domain = env.get("AUTH0_DOMAIN", "").strip().removeprefix("https://").rstrip("/")
+    audience = env.get("AUTH0_AUDIENCE", "").strip()
+    if not domain or not audience:
+        raise SystemExit("AUTH_MODE=auth0 needs AUTH0_DOMAIN (e.g. vocaleyes.us.auth0.com) and AUTH0_AUDIENCE (the API Identifier).")
+    return domain, audience
+
+
+def build_users(env=os.environ, store=None, userinfo=None) -> UserService:
+    if store is None:
+        if env.get("VOICE_STORE", "dynamodb") == "memory":
+            store = MemoryUserStore()
+        else:
+            table = env.get("VOICE_TABLE_NAME")
+            if not table:
+                raise SystemExit("VOICE_TABLE_NAME is required for the dynamodb store.")
+            store = DynamoUserStore(table, region=env.get("AWS_REGION"))
+    return UserService(store, userinfo or Auth0UserInfo(auth0_settings(env)[0]))
+
+
+def build_auth(env=os.environ, host: str = "127.0.0.1", jwk_client=None):
     mode = env.get("AUTH_MODE", "jwt")
     if mode == "dev":
         if host not in LOOPBACK:
             raise SystemExit("AUTH_MODE=dev trusts the X-User-Id header and is only allowed on a loopback HOST.")
         return DevAuth()
+    if mode == "auth0":
+        domain, audience = auth0_settings(env)
+        # Auth0's issuer is https://<domain>/ with the trailing slash; its keys are at <issuer>.well-known/jwks.json.
+        a0 = JwtAuth(f"https://{domain}/", audience, jwk_client=jwk_client)
+        a0.name = "auth0"
+        return FirstOf(a0, DevAuth()) if host in LOOPBACK else a0  # on a laptop the dev test login keeps working
     if mode != "jwt":
-        raise SystemExit("AUTH_MODE must be jwt or dev")
+        raise SystemExit("AUTH_MODE must be auth0, jwt or dev")
     return JwtAuth(env.get("JWT_ISSUER", ""), env.get("JWT_AUDIENCE") or None, env.get("JWT_JWKS_URL") or None)
 
 
@@ -113,6 +142,8 @@ def check_config(env=os.environ) -> dict:
         "slot_limit": int(env.get("VOICE_SLOT_LIMIT", "10")),
         "auth": env.get("AUTH_MODE", "jwt"),
         "jwt_issuer": env.get("JWT_ISSUER"),
+        "auth0_domain": env.get("AUTH0_DOMAIN"),
+        "auth0_audience": env.get("AUTH0_AUDIENCE"),
         "host": env.get("HOST", "127.0.0.1"),
         "port": int(env.get("PORT", "8790")),
     }
@@ -132,7 +163,14 @@ def main(argv: Optional[list] = None) -> int:
 
         host, port = env.get("HOST", "127.0.0.1"), int(env.get("PORT", "8790"))
         service = build_service(env)
-        app = create_hosted_app(service, build_auth(env, host), [o for o in env.get("CORS_ORIGINS", "").split(",") if o], int(env.get("SPEAK_PER_MINUTE", "60")))
+        users = build_users(env) if env.get("AUTH_MODE", "jwt") == "auth0" else None
+        app = create_hosted_app(
+            service,
+            build_auth(env, host),
+            [o for o in env.get("CORS_ORIGINS", "").split(",") if o],
+            int(env.get("SPEAK_PER_MINUTE", "60")),
+            users=users,
+        )
         print(f"[hosted-voice] store={env.get('VOICE_STORE', 'dynamodb')} auth={env.get('AUTH_MODE', 'jwt')} listening on http://{host}:{port}", flush=True)
         uvicorn.run(app, host=host, port=port, log_level="warning")
         return 0

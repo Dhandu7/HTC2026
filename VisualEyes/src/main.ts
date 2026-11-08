@@ -1,3 +1,4 @@
+import { containsSlur, SLUR_NOTICE } from "./safety/slurs";
 import "./style.css";
 import { FaceTracker } from "./gaze/tracker";
 import { GazeEngine, type GazePoint } from "./gaze/engine";
@@ -23,7 +24,10 @@ import { SystemVoice } from "./voice/system";
 import { HostedVoiceApi } from "./voice/hostedApi";
 import { HostedVoiceController, friendlyReason } from "./voice/hostedController";
 import { HostedVoice, BrowserAudioSink } from "./voice/hostedVoice";
-import { apiConfigFrom, loadVoiceApiSettings, saveVoiceApiSettings, usingDevLogin, type VoiceApiSettings } from "./voice/hostedConfig";
+import { apiConfigFrom, loadVoiceApiSettings, saveVoiceApiSettings, setTokenProvider, usingDevLogin, type VoiceApiSettings } from "./voice/hostedConfig";
+import { AccountApi, PrefsSync, setSkippedSignIn, skippedSignIn, type SyncedPrefs } from "./account/account";
+import { Auth0Session, auth0Config, canRedirect, type SignedInUser } from "./account/auth0";
+import { mountAuthScreen } from "./ui/authScreen";
 import { mountMyVoice } from "./ui/myVoice";
 import { startVoiceCommands } from "./input/voice";
 
@@ -80,7 +84,13 @@ const load = <T>(k: string, d: T): T => {
   }
 };
 const settings: Settings = load("gazetype.settings.v1", DEFAULTS);
-const saveSettings = () => localStorage.setItem("gazetype.settings.v1", JSON.stringify(settings));
+/** Set once the account code below is ready: sends changed preferences to the signed-in account. */
+let prefsChanged: () => void = () => {};
+const storeSettings = () => localStorage.setItem("gazetype.settings.v1", JSON.stringify(settings));
+const saveSettings = () => {
+  storeSettings();
+  prefsChanged();
+};
 
 // ---------- DOM ----------
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
@@ -129,6 +139,7 @@ const host: KeyboardHost = {
   overlay: isOverlay,
   profiles: () => profiles.list(),
   activeProfileId: () => profiles.active.id,
+  notice: (m) => showToast(m, 3500),
 };
 const gazeKb = new GazeTypeKeyboard(predictor, host);
 const baseKb = new BaselineKeyboard(predictor, host, settings.baselinePrediction);
@@ -277,7 +288,7 @@ function onGaze(g: GazePoint) {
   const show = settings.showCursor && g.valid && Number.isFinite(g.x);
   cursor.hidden = !show;
   if (show) {
-    const r = Math.max(14, lastError ? Math.min(lastError.meanPx, 200) : 14);
+    const r = Math.max(8, lastError ? Math.min(lastError.meanPx * 0.4, 50) : 8);
     cursor.style.transform = `translate(${g.x - r}px, ${g.y - r}px)`;
     cursor.style.width = cursor.style.height = `${2 * r}px`;
   }
@@ -463,11 +474,17 @@ function voiceStatusText(): string {
 
 function speak(text: string) {
   if (!text.trim()) return;
+  if (containsSlur(text)) return void showToast(SLUR_NOTICE, 3500); // also covers voice commands
   void voice.speak(text);
 }
 
 async function doAction(a: string) {
   const text = kb.text().trim();
+  // Last line of defence for anything that leaves the app (works for every keyboard, typed any way).
+  if ((a === "speak" || a === "insert" || a === "copy") && containsSlur(text)) {
+    showToast(SLUR_NOTICE, 3500);
+    return;
+  }
   if (a.startsWith("profile:")) {
     switchProfile(a.slice("profile:".length));
     showToast(`Now typing as <b>${esc(profiles.active.name)}</b>`);
@@ -918,6 +935,7 @@ function saveProfileForm() {
   predictor.setTopics(pf.about.value);
   applyProfile(profiles.active);
   render();
+  prefsChanged();
 }
 
 pf.select.addEventListener("change", () => loadProfileForm(pf.select.value));
@@ -958,6 +976,7 @@ $("#pf-learn").addEventListener("click", () => {
   const samples = pickSamples([...p.samples, ...splitSentences(text)]);
   profiles.update(p.id, { samples });
   applyProfile(profiles.active);
+  prefsChanged();
   pf.samples.value = "";
   pf.learned.textContent = `Learned from ${n} sentences. ${samples.length} are used as examples for AI suggestions.`;
 });
@@ -1025,10 +1044,141 @@ async function refreshServices(attempt = 0) {
   if (ai.reason === "no-server" && attempt < 30) setTimeout(() => void refreshServices(attempt + 1), 2000);
 }
 
+// ---------- account: Auth0 sign-in, preferences and voice in the cloud ----------
+// Auth0 signs people in (passwords, sign-up, resets, social logins). Its access token goes to our hosted service (the
+// same one as "My voice"), which keys each person's preferences and voice in DynamoDB by their Auth0 user id.
+const auth0Cfg = auth0Config((import.meta as unknown as { env: Record<string, string | undefined> }).env);
+const auth = auth0Cfg && canRedirect() ? new Auth0Session(auth0Cfg) : null;
+const accountApi = new AccountApi(() => voiceApiSettings.baseUrl);
+let account: SignedInUser | null = null;
+const ACCOUNT_PROFILE = "gazetype.accountProfile.";
+const token = async () => (account && auth ? auth.token() : null);
+
+function collectPrefs(): SyncedPrefs {
+  const p = profiles.active;
+  return { settings: { ...settings }, profile: { name: p.name, about: p.about, people: p.people, samples: p.samples } };
+}
+
+function applyRemotePrefs(r: SyncedPrefs) {
+  const s = settings as unknown as Record<string, unknown>;
+  for (const k of Object.keys(DEFAULTS) as (keyof Settings)[]) {
+    const v = r.settings?.[k];
+    if (v !== undefined && typeof v === typeof DEFAULTS[k]) s[k] = v; // ignore anything this build doesn't understand
+  }
+  storeSettings();
+  baseKb.withPrediction = settings.baselinePrediction;
+  if (r.profile) {
+    const { name, about, people, samples } = r.profile;
+    profiles.update(profiles.active.id, {
+      ...(typeof name === "string" && name ? { name } : {}),
+      ...(typeof about === "string" ? { about } : {}),
+      ...(Array.isArray(people) ? { people: people.filter((x) => typeof x === "string") } : {}),
+      ...(Array.isArray(samples) ? { samples: samples.filter((x) => typeof x === "string") } : {}),
+    });
+    predictor.setPinned(profiles.active.people);
+    predictor.setTopics(profiles.active.about);
+  }
+  applyProfile(profiles.active);
+  render();
+}
+
+/** The local profile that belongs to this account: the one used last time, else the current one if no other account claimed it, else a new one. */
+function profileFor(user: SignedInUser): string {
+  const linked = localStorage.getItem(ACCOUNT_PROFILE + user.sub);
+  if (linked && profiles.list().some((p) => p.id === linked)) return linked;
+  const claimed = new Set<string>();
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k?.startsWith(ACCOUNT_PROFILE)) claimed.add(localStorage.getItem(k) ?? "");
+  }
+  const id = claimed.has(profiles.active.id) ? profiles.create(user.name || user.email || "Me").id : profiles.active.id;
+  localStorage.setItem(ACCOUNT_PROFILE + user.sub, id);
+  return id;
+}
+
+const prefsSync = new PrefsSync(
+  accountApi,
+  token,
+  collectPrefs,
+  (e) => {
+    if (e.status === 401) void signOut("Your sign-in has ended. Sign in again to keep your settings in step.");
+  },
+  1500,
+  () => account !== null,
+);
+prefsChanged = () => prefsSync.schedule();
+
+function updateAccountLine() {
+  $("#account-line").textContent = account ? `Signed in as ${account.name || account.email || "you"}` : "Not signed in: settings stay on this computer.";
+  $("#account-btn").textContent = account ? "Sign out" : "Sign in";
+  $("#account-btn").hidden = !auth;
+}
+
+async function startAccount(user: SignedInUser) {
+  account = user;
+  setSkippedSignIn(localStorage, false);
+  setTokenProvider(token); // "My voice" now belongs to this Auth0 user
+  const firstTime = !localStorage.getItem(ACCOUNT_PROFILE + user.sub);
+  switchProfile(profileFor(user));
+  if (firstTime && user.name && profiles.active.name === "Me") profiles.update(profiles.active.id, { name: user.name });
+  applyProfile(profiles.active);
+  updateAccountLine();
+  void voiceCtl.refresh().then(updateTtsLine);
+  try {
+    const t = await token();
+    if (t) void accountApi.me(t).catch(() => {}); // lets the service save this person's email and name next to their data
+    const remote = await prefsSync.pull(); // the service's copy wins; a brand-new account gets this computer's
+    if (remote) applyRemotePrefs(remote);
+  } catch (e) {
+    showToast(`Signed in, but your settings couldn't be loaded: ${esc((e as Error).message)}`);
+  }
+}
+
+async function signOut(message?: string) {
+  if (account) await prefsSync.flush(); // don't lose a change made in the last second
+  account = null;
+  setTokenProvider(null);
+  updateAccountLine();
+  if (message) showToast(esc(message), 6000);
+  await auth?.signOut(); // ends the Auth0 session too, then comes back to this page signed out
+}
+
+const authScreen = mountAuthScreen({
+  root: $("#auth"),
+  unavailable: () =>
+    !auth0Cfg
+      ? "Sign-in isn't set up on this copy yet (VITE_AUTH0_DOMAIN, VITE_AUTH0_CLIENT_ID and VITE_AUTH0_AUDIENCE in VisualEyes/.env)."
+      : !canRedirect()
+        ? "Sign-in needs the web version of GazeType. You can still use it without an account here."
+        : null,
+  signIn: (signUp) => (auth ? auth.signIn(signUp) : Promise.reject(new Error("sign-in is not set up"))),
+  onSkip: () => {
+    setSkippedSignIn(localStorage, true);
+    authScreen.hide();
+  },
+});
+$("#account-btn").addEventListener("click", () => (account ? void signOut() : authScreen.show()));
+
+/** Finish an Auth0 redirect or restore the last session, before anything asks the service about this user's voice. */
+async function initAccount() {
+  let user: SignedInUser | null = null;
+  if (auth) {
+    try {
+      user = await auth.init();
+    } catch (e) {
+      showToast(`Sign-in problem: ${esc((e as Error).message)}`, 8000);
+    }
+  }
+  if (user) await startAccount(user);
+  else if (!skippedSignIn(localStorage)) authScreen.show();
+  updateAccountLine();
+}
+
 // ---------- boot ----------
 async function boot() {
   const words = await fetch("./data/words-10k.txt").then((r) => r.text());
   predictor.load(words.split("\n"), CORE_WORDS, SEED_PHRASES);
+  await initAccount();
   applyProfile(profiles.active);
   gazeKb.update();
   render();

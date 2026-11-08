@@ -9,7 +9,7 @@ function setup() {
   const engine = new PredictionEngine(memoryStore(), () => 1_000_000);
   engine.load(["hello", "water", "thank", "you", "please"], ["yes", "no"], ["I need water", "Thank you", "Yes please", "Can you help me", "I'm tired", "Hello"]);
   const actions: string[] = [];
-  const host: KeyboardHost = { refresh: () => {}, action: (a) => actions.push(a), overlay: false, profiles: () => [], activeProfileId: () => "" };
+  const host: KeyboardHost = { refresh: () => {}, action: (a) => actions.push(a), overlay: false, profiles: () => [], activeProfileId: () => "", notice: () => {} };
   return { kb: new GazeTypeKeyboard(engine, host), actions };
 }
 

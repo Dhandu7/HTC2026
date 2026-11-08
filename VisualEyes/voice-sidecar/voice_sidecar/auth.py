@@ -20,7 +20,7 @@ class AuthError(Exception):
     pass
 
 
-def _bearer(request) -> str:
+def bearer_token(request) -> str:
     h = request.headers.get("authorization", "")
     if not h.lower().startswith("bearer ") or len(h) < 10:
         raise AuthError("missing bearer token")
@@ -53,7 +53,7 @@ class JwtAuth:
     def user_id(self, request) -> str:
         import jwt
 
-        token = _bearer(request)
+        token = bearer_token(request)
         try:
             key = self._jwks.get_signing_key_from_jwt(token).key
             claims = jwt.decode(
@@ -75,3 +75,17 @@ class JwtAuth:
         if not USER_ID.match(sub):
             raise AuthError("invalid or expired token")
         return sub
+
+
+class FirstOf:
+    """Auth0 mode on a laptop: a bearer token if one is sent, else the dev X-User-Id header. Built only when the
+    server is bound to a loopback address (hosted_main.build_auth), exactly like DevAuth on its own."""
+
+    def __init__(self, primary, fallback):
+        self.primary, self.fallback = primary, fallback
+        self.name = f"{primary.name}+{fallback.name}"
+
+    def user_id(self, request) -> str:
+        if request.headers.get("authorization"):
+            return self.primary.user_id(request)  # a bad token is an error, never a silent fall back to the header
+        return self.fallback.user_id(request)

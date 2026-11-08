@@ -183,14 +183,31 @@ describe("suggestions on longer sentences", () => {
   it("offers a stored phrase from the middle of a sentence", () => {
     const e = engine();
     e.ingest("Tell Priya I love her.");
-    const s = e.phraseCompletions(["after", "dinner", "can", "you", "tell"], [], 3);
-    expect(s[0]?.text).toBe("Priya I love her");
+    // Two meaningful words in common ("tell priya") anchor the match.
+    const s = e.phraseCompletions(["after", "dinner", "can", "you", "tell", "priya"], [], 3);
+    expect(s[0]?.text).toBe("I love her");
+    // Three words of any kind do too.
+    e.ingest("When does the hockey game start?");
+    expect(e.phraseCompletions(["so", "when", "does", "the"], [], 3)[0]?.text).toBe("hockey game start");
   });
-  it("doesn't anchor a mid-sentence phrase on a lone common word", () => {
+  it("doesn't glue on an ending that makes no sense", () => {
     const e = engine();
     e.ingest("The hockey game starts at seven.");
-    expect(e.phraseCompletions(["i", "want", "the"], [], 3)).toHaveLength(0);
-    expect(e.phraseCompletions(["i", "want", "the", "hockey"], [], 3)[0].text).toBe("game starts at seven");
+    e.ingest("Let's watch the game together tonight.");
+    e.ingest("Dev u coming over tonight or nah");
+    // One shared word, or a common word plus one other, is too weak: these were real nonsense chips.
+    expect(e.phraseCompletions(["i", "want", "the", "hockey"], [], 3)).toHaveLength(0); // "I want the hockey game starts at seven"
+    expect(e.phraseCompletions(["can", "you", "turn", "the", "game"], [], 3)).toHaveLength(0); // "...turn the game together tonight"
+    expect(e.phraseCompletions(["maya", "can", "u"], [], 3)).toHaveLength(0); // "maya can u coming over tonight or nah"
+  });
+  it("shows short phrases whole and never ends a cut phrase on a dangling word", () => {
+    const e = engine();
+    e.ingest("Yo can u tell Maya to grab my charger");
+    // 9 words: cut to 6 ("Yo can u tell Maya to"), then the dangling "to" is dropped.
+    expect(e.phraseCompletions([], [], 1)[0].text).toBe("Yo can u tell Maya");
+    const f = engine();
+    f.ingest("Can you put the Oilers game on tonight"); // 8 words: shown whole
+    expect(f.phraseCompletions([], [], 1)[0].text).toBe("Can you put the Oilers game on tonight");
   });
   it("keeps phrase chips short and correctly capitalised", () => {
     const e = engine();

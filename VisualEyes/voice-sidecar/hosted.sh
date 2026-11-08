@@ -89,17 +89,30 @@ case "${1:-}" in
   test)  shift; exec "$PY" -m pytest -q tests_hosted "$@" ;;
   local)
     # The one command a teammate needs: first run installs Python 3.12 deps, then serves the API for the app on
-    # this machine only (127.0.0.1, in memory, the dev test login). Anything you set yourself still wins.
+    # this machine only (127.0.0.1, in memory, Auth0 sign-in if configured, plus the dev test login). Anything you set yourself still wins.
     shift
     [ -x "$PY" ] || bash "$SELF" setup
-    export VOICE_STORE="${VOICE_STORE:-memory}" AUTH_MODE="${AUTH_MODE:-dev}"
+    # Non-secret settings may also come from VisualEyes/.env, so `npm run voice` can use the real DynamoDB table.
+    for v in VOICE_STORE VOICE_TABLE_NAME AWS_REGION AUTH0_DOMAIN AUTH0_AUDIENCE; do
+      if [ -z "${!v:-}" ]; then val="$(env_value "$v")"; [ -z "$val" ] || export "$v=$val"; fi
+    done
+    # The app's own Auth0 settings (VITE_AUTH0_*) are the same tenant and API, so the service can reuse them.
+    [ -n "${AUTH0_DOMAIN:-}" ] || { val="$(env_value VITE_AUTH0_DOMAIN)"; [ -z "$val" ] || export AUTH0_DOMAIN="$val"; }
+    [ -n "${AUTH0_AUDIENCE:-}" ] || { val="$(env_value VITE_AUTH0_AUDIENCE)"; [ -z "$val" ] || export AUTH0_AUDIENCE="$val"; }
+    # Auth0 sign-in when it is configured (the dev test login still works on this machine), else the dev login alone.
+    if [ -n "${AUTH0_DOMAIN:-}" ] && [ -n "${AUTH0_AUDIENCE:-}" ]; then DEFAULT_AUTH=auth0; else DEFAULT_AUTH=dev; fi
+    export VOICE_STORE="${VOICE_STORE:-memory}" AUTH_MODE="${AUTH_MODE:-$DEFAULT_AUTH}"
     export CORS_ORIGINS="${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}"
     load_key
     if [ -z "${ELEVENLABS_API_KEY:-}" ] && [ -z "${ELEVENLABS_SECRET_ID:-}" ]; then
       echo "No ElevenLabs key found. Copy VisualEyes/.env.example to VisualEyes/.env and put your key after ELEVENLABS_API_KEY= (it starts with sk_), or run ./hosted.sh key-set. Then run this again." >&2
       exit 1
     fi
-    echo "Voice service for this machine only: voices are kept in memory, so they are forgotten when this stops."
+    if [ "$VOICE_STORE" = "dynamodb" ]; then
+      echo "Voice service for this machine only, saving accounts, preferences and voices to DynamoDB table ${VOICE_TABLE_NAME:-?} (${AWS_REGION:-default region})."
+    else
+      echo "Voice service for this machine only: accounts and voices are kept in memory, so they are forgotten when this stops."
+    fi
     exec "$PY" -m voice_sidecar.hosted_main serve "$@" ;;
   serve) shift; load_key; exec "$PY" -m voice_sidecar.hosted_main serve "$@" ;;
   reconcile) shift; load_key; exec "$PY" -m voice_sidecar.hosted_main reconcile "$@" ;;
