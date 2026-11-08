@@ -378,6 +378,7 @@ const screens = makeScreens({
     render();
   },
   sayAgain: (t) => say(t),
+  speak: (t) => say(t),
   history: () => history,
   frequent: (n) => predictor.topPhrases(n),
   recalibrate: () => void calibrate(),
@@ -1013,6 +1014,7 @@ function uiAction(a: string) {
     case "access":
     case "settings":
     case "recent":
+    case "local":
       return openScreen(screenName === a ? null : (a as ScreenName));
     case "back":
       return openScreen(null);
@@ -1097,6 +1099,7 @@ async function doAction(a: string) {
     case "voice":
     case "phrases":
     case "recent":
+    case "local":
     case "access":
     case "settings":
       uiAction(a);

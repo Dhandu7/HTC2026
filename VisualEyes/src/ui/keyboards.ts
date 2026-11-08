@@ -273,7 +273,7 @@ export class GazeTypeKeyboard implements Keyboard {
         key("act:recenter", "Re-centre", "fn", "or blink 3 times") +
         key("act:profiles", "Switch user", "fn", me?.name ?? "") +
         key("act:rest", "Rest", "fn", "pause eye tracking") +
-        (this.host.benchmarking?.() ? key("act:benchmark-done", "Finish run", "fn") : ov ? key("act:hide", "Hide", "fn") : blank()) +
+        (this.host.benchmarking?.() ? key("act:benchmark-done", "Finish run", "fn") : ov ? key("act:hide", "Hide", "fn") : key("act:local", "Calgary help", "fn", "ask for local help")) +
         key("back", "Back", "fn");
     } else if (p === "numbers") {
       root.innerHTML =

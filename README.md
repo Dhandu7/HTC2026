@@ -20,6 +20,7 @@ Dedicated eye-tracking communication devices cost thousands of dollars and still
 - **Built for imperfect tracking.** The app opens on 6 large ready-to-speak phrases. Selection is by dwell (1.5 s by default) or a deliberate blink, and targets snap and hold so small wobbles don't cause wrong picks.
 - **Prediction-first typing.** A 4×4 keyboard of letter groups with word completion, next-word prediction and a personal phrase store that learns every sentence the user speaks. Abbreviation expansion turns one key per word into a full sentence.
 - **AI reply suggestions.** Claude suggests whole sentences that match the user's profile and writing style. Only text is sent, never video.
+- **Local help.** A Calgary help screen, tucked behind the Done menu, lists real local services such as the ALS Society of Alberta and Calgary Transit Access. One glance speaks a request to the person in the room, who makes the call.
 - **Hears the other side.** With "Listen to the other person" on, the partner's speech is transcribed in the browser and Claude offers replies on the home screen, so answering takes one selection. What was heard shows on screen, the microphone is muted while the app speaks, and no audio is stored.
 - **Your own voice.** "My voice" clones the user's voice from their recordings with ElevenLabs. Without it, the browser's system voice speaks.
 - **Profiles and sign-in.** Each user has their own words, phrases and calibration. Caregivers can add names of people, an about note and writing samples. Auth0 sign-in syncs settings and profile between devices.

@@ -61,6 +61,7 @@ describe("Settings screen: Your data", () => {
       aiStatus: () => "",
       listenStatus: () => "",
       eraseData: () => calls.push("erase"),
+      speak: () => {},
     };
   }
 

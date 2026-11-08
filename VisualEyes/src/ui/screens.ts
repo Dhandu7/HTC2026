@@ -1,10 +1,11 @@
-// The screens beside the message screen: Saved phrases, Recent, Accessibility, Settings and Colour theme.
+// The screens beside the message screen: Saved phrases, Recent, Calgary help, Accessibility, Settings and Colour theme.
 // Every control is a gaze target (dom.ts `g`), so all of it works hands-free. The few caretaker tools at the
 // bottom of Settings are ordinary buttons: they open forms that need a keyboard.
 import { esc, g } from "./dom";
 import { THEMES, themeOf, type Settings } from "../settings";
+import { LOCAL_HELP } from "./local";
 
-export type ScreenName = "phrases" | "recent" | "access" | "settings" | "theme" | "voice" | "voiceSetup";
+export type ScreenName = "phrases" | "recent" | "local" | "access" | "settings" | "theme" | "voice" | "voiceSetup";
 
 export interface CaretakerTool {
   label: string;
@@ -19,6 +20,8 @@ export interface ScreensCtx {
   open(name: ScreenName | null): void;
   insertPhrase(text: string): void;
   sayAgain(text: string): void;
+  /** Speak a request out loud to the person in the room (Calgary help). */
+  speak(text: string): void;
   history(): string[];
   frequent(n: number): string[];
   recalibrate(): void;
@@ -112,6 +115,28 @@ export function makeScreens(ctx: ScreensCtx): Record<Exclude<ScreenName, "voice"
       select(id) {
         const t = ctx.history()[Number(id.split(":")[2])];
         if (t) ctx.sayAgain(t);
+      },
+    },
+
+    local: {
+      title: "Calgary help",
+      sub: "Look at a card to ask the person with you. You speak, they call or look it up.",
+      back: "message",
+      render() {
+        return `<div class="grid2 grow">${LOCAL_HELP.map((h, i) =>
+          g(
+            `s:lh:${i}`,
+            `<span class="lbl" style="font-size:1.75rem">${esc(h.org)}</span><span class="hint" style="font-size:1.125rem">${esc(h.what)}</span><span class="td" style="font-size:1.375rem;font-weight:800;color:var(--brandText)">\u201C${esc(h.ask)}\u201D</span>`,
+            { face: "btn", read: true, faceStyle: "min-height:6rem;flex-direction:column;align-items:flex-start;gap:.25rem;text-align:left;padding:.75rem 1.5rem" },
+          ),
+        ).join("")}</div>`;
+      },
+      select(id) {
+        const h = LOCAL_HELP[Number(id.split(":")[2])];
+        if (!h) return;
+        ctx.speak(h.ask);
+        ctx.open(null);
+        ctx.toast("Asked out loud.", 2500);
       },
     },
 
