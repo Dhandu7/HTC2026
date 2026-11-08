@@ -1774,7 +1774,7 @@ const onboard = new Onboarding(onboardRoot, {
   profiles: () => profiles.list(),
   activeProfile: () => profiles.active.id,
   switchProfile: (id) => switchProfile(id),
-  statusLines: () => [llmLine, ttsLine, { on: settings.listen, text: settings.listen ? "Listening to the other person: replies to what they say appear on the home screen." : "Not listening to the other person. Turn it on in Settings to get replies to what they say." }],
+  statusLines: () => [llmLine, ttsLine],
   shown: () => {
     appRoot.hidden = true;
     clearHover();
