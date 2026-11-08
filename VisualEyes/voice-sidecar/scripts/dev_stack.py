@@ -106,7 +106,7 @@ def main() -> int:
     os.environ.update(
         {
             "VOICE_STORE": "memory",
-            "AUTH_MODE": "dev",
+            "AUTH_MODE": "accounts",  # sign-in pages work against this too; the dev login still does (loopback)
             "ELEVENLABS_API_KEY": "fake-dev-key",
             "ELEVENLABS_BASE_URL": f"http://127.0.0.1:{FAKE_PORT}",
             "CORS_ORIGINS": os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,null"),

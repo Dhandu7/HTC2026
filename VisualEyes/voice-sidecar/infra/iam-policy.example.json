@@ -26,6 +26,12 @@
       "Effect": "Allow",
       "Action": "secretsmanager:GetSecretValue",
       "Resource": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:vocaleyes/elevenlabs-api-key-*"
+    },
+    {
+      "Sid": "AccountsSigningKeyReadOnly",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:vocaleyes/accounts-signing-key-*"
     }
   ]
 }
