@@ -1,16 +1,20 @@
-# HTC2026
+<p align="center">
+  <img src="brand/visualeyes-banner.svg" alt="VisualEyes logo" width="100%">
+</p>
 
-# VocalEyes
+# VisualEyes
 
-> **Speak with your eyes stay part of the conversation**
+> **Speak with your head and stay part of the conversation.**
 
-VocalEyes is a webcam-only, conversation-first communicator for people who can't speak or use their hands, such as people living with ALS, cerebral palsy or locked-in syndrome. It runs on any laptop with a webcam. The user looks at a suggested reply, and VocalEyes speaks it aloud. Typing is the mechanism. The conversation is the product.
+**Hack the Change 2026** · Team **P76W26**
+
+VisualEyes is a webcam-only, conversation-first communicator for people who can't speak or use their hands, such as people living with ALS, cerebral palsy or locked-in syndrome. It runs on any laptop with a webcam. The user looks at a suggested reply, and VisualEyes speaks it aloud. Typing is the mechanism. The conversation is the product.
 
 ## The problem
 
 Dedicated eye-tracking communication devices cost thousands of dollars and still make people type one letter at a time. A conversation at that speed loses its jokes, its timing and its warmth. People drift away from friends and family, and isolation is itself a health risk.
 
-## What VocalEyes does
+## What VisualEyes does
 
 - **Webcam-only gaze control.** MediaPipe face and iris landmarks, with a 9-point calibration. Gaze tracking runs on-device, so no video leaves the laptop.
 - **Built for imperfect tracking.** Large targets, dwell selection (~700 ms) and a prediction-first layout, so a few degrees of error doesn't break the experience.
@@ -36,15 +40,24 @@ The target test is what using the app feels like: the user sees the pointer and 
 
 ## How it works
 
+```mermaid
+flowchart LR
+    cam["Webcam"] --> mp["MediaPipe<br/>Face Landmarker"]
+    mp --> head["Head pointer"]
+    head --> kb["Keyboard<br/>dwell to select"]
+    kb --> voice["ElevenLabs<br/>your own voice"]
+    voice --> out["Spoken aloud"]
+    llm["Claude<br/>reply suggestions"] <-.-> kb
+
+    classDef local fill:#EEF5F6,stroke:#0B4F5C,color:#0B4F5C,stroke-width:2px
+    classDef remote fill:#FFF1EC,stroke:#E4572E,color:#7A2A12,stroke-width:2px
+    classDef result fill:#0B4F5C,stroke:#0B4F5C,color:#FFFFFF,stroke-width:2px
+    class cam,mp,head,kb local
+    class llm,voice remote
+    class out result
 ```
-Webcam → Gaze module (in browser) → {x, y, confidence}
-                                         ↓
-Partner mic → speech-to-text → Conversation UI ← gaze selects a suggestion
-                                    ↓                    ↓
-                       POST /suggest (Claude)     Text-to-speech
-                                    ↓
-              Backend (phrases, messages, mood) → Family dashboard → n8n alerts
-```
+
+Teal runs on the laptop, so video never leaves it. Orange is a cloud service that only receives text.
 
 | Layer | Tech |
 |---|---|
@@ -74,7 +87,7 @@ Open the app in Chrome, allow webcam access, and complete the 9-point calibratio
 
 - Video is processed in the browser and never uploaded.
 - Only the text of selected messages and the user's learned phrases are stored.
-- VocalEyes is a communication aid, not a medical device.
+- VisualEyes is a communication aid, not a medical device.
 
 ## Roadmap
 
@@ -85,15 +98,17 @@ Open the app in Chrome, allow webcam access, and complete the 9-point calibratio
 
 ## Team
 
-| Name | Role |
-|---|---|
-| [Name] | Gaze tracking |
-| [Name] | Gaze UI |
-| [Name] | Conversation engine |
-| [Name] | Family loop and local impact |
-| [Name] | Backend and integration |
+Team **P76W26** at **Hack the Change 2026**.
 
-Built at [Hackathon name], [Nov 2026].
+| Name | GitHub |
+|---|---|
+| Aaryan Dhand | [@Dhandu7](https://github.com/Dhandu7) |
+| Adeeb Hossain | [@AdeebHossain](https://github.com/AdeebHossain) |
+| Chetan Tyagi | [@chetanty](https://github.com/chetanty) |
+| Derek Atabayev | [@derekatab](https://github.com/derekatab) |
+| Rajvir | [@Rajvir3104](https://github.com/Rajvir3104) |
+
+Built at Hack the Change 2026, November 2026.
 
 ## License
 

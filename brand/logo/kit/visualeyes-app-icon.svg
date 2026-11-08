@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">VisualEyes app icon</title>
+  <rect width="256" height="256" rx="56" fill="#0B4F5C"/>
+  <g transform="translate(40.96 36.96) scale(0.68)">
+  <path id="bubble" fill="#FFFFFF" fill-rule="evenodd" d="M24 108 A112.26 112.26 0 0 1 232 108 A112.26 112.26 0 0 1 150.0 175.82 L45.56 217.88 L62 156.55 A112.26 112.26 0 0 1 24 108 Z M94 108 A40 40 0 1 0 174 108 A40 40 0 1 0 94 108 Z"/>
+  <path id="pupil" fill="#FF8F6B" d="M118 108 A21 21 0 1 0 160 108 A21 21 0 1 0 118 108 Z"/>
+  </g>
+</svg>

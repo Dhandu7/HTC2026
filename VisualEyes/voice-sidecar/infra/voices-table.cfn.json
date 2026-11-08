@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "VocalEyes per-user voice records (ElevenLabs). Starting point for Rajvir: adapt names, tags and encryption to the team's conventions. Not deployed or tested in AWS yet.",
+  "Description": "VisualEyes per-user voice records (ElevenLabs). Starting point for Rajvir: adapt names, tags and encryption to the team's conventions. Not deployed or tested in AWS yet.",
   "Parameters": {
     "TableName": { "Type": "String", "Default": "vocaleyes-voices", "Description": "DynamoDB table name; the app reads it from VOICE_TABLE_NAME" },
     "Environment": { "Type": "String", "Default": "dev", "AllowedValues": ["dev", "staging", "prod"] }
