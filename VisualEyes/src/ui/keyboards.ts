@@ -234,17 +234,12 @@ export class GazeTypeKeyboard implements Keyboard {
         .join("");
       const group = (i: number) => key(`g:${i}`, LETTER_GROUPS[i].toUpperCase(), "grp");
       const n = this.slots.length;
-      // Delete sits one step in from the edge (row 3, column 2): the pointer struggles to reach the
-      // corners, bottom-left worst of all, and delete is used constantly. The least-used
-      // letter group (WXYZ) takes the bottom-left corner instead. Letters keep reading order.
+      // Rows 2–3: the eight letter groups in alphabetical order (ABC DEF GHI JKL / MNO PQRS TUV WXYZ),
+      // so a key is always where you expect it. Row 4: the controls.
       root.innerHTML =
         chips +
-        [0, 1, 2, 3].map(group).join("") +
-        group(4) +
+        [0, 1, 2, 3, 4, 5, 6, 7].map(group).join("") +
         key("del", "Delete", "fn", n ? "letter" : "word") +
-        group(5) +
-        group(6) +
-        group(7) +
         key("space", "Space", "fn", n ? "accept" : "") +
         key("phrases", n >= 2 ? "Expand" : "Phrases", "fn", n >= 2 ? "initials to sentence" : "") +
         key("menu", "Done", "fn", "speak and more");
