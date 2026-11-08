@@ -101,7 +101,7 @@ case "${1:-}" in
     [ -n "${AUTH0_AUDIENCE:-}" ] || { val="$(env_value VITE_AUTH0_AUDIENCE)"; [ -z "$val" ] || export AUTH0_AUDIENCE="$val"; }
     # Auth0 sign-in when it is configured (the dev test login still works on this machine), else the dev login alone.
     if [ -n "${AUTH0_DOMAIN:-}" ] && [ -n "${AUTH0_AUDIENCE:-}" ]; then DEFAULT_AUTH=auth0; else DEFAULT_AUTH=dev; fi
-    export VOICE_STORE="${VOICE_STORE:-memory}" AUTH_MODE="${AUTH_MODE:-$DEFAULT_AUTH}"
+    export VOICE_STORE="${VOICE_STORE:-memory}" AUTH_MODE="${AUTH_MODE:-$DEFAULT_AUTH}" ALLOW_DEV_LOGIN="${ALLOW_DEV_LOGIN:-1}"   # laptop only
     export CORS_ORIGINS="${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}"
     load_key
     if [ -z "${ELEVENLABS_API_KEY:-}" ] && [ -z "${ELEVENLABS_SECRET_ID:-}" ]; then

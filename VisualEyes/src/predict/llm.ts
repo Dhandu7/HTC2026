@@ -15,12 +15,23 @@ export interface LlmProfile {
 
 let available: boolean | null = null;
 let profile: LlmProfile | undefined;
+/** The deployed site only lets signed-in people use AI suggestions (it spends API credit), so calls carry the sign-in token. */
+let getToken: (() => Promise<string | null>) | null = null;
+export function setLlmToken(fn: (() => Promise<string | null>) | null) {
+  getToken = fn;
+}
+async function headers(json = false): Promise<Record<string, string>> {
+  const h: Record<string, string> = json ? { "Content-Type": "application/json" } : {};
+  const t = getToken ? await getToken().catch(() => null) : null;
+  if (t) h.Authorization = `Bearer ${t}`;
+  return h;
+}
 
 /** Why the LLM is or isn't available, for the start screen. */
 export interface LlmStatus {
   on: boolean;
-  /** "no-server": proxy not running. "no-key": running without ANTHROPIC_API_KEY. */
-  reason?: "no-server" | "no-key";
+  /** "no-server": proxy not running. "no-key": running without ANTHROPIC_API_KEY. "sign-in": the site needs a sign-in first. */
+  reason?: "no-server" | "no-key" | "sign-in";
   fastModel?: string;
   /** The server can speak in the user's cloned voice (ElevenLabs). */
   voice?: boolean;
@@ -41,7 +52,12 @@ export function setLlmProfile(p: LlmProfile | undefined) {
 export async function llmAvailable(refresh = false): Promise<boolean> {
   if (available !== null && !refresh) return available;
   try {
-    const r = await fetch(`${base()}/api/health`, { signal: AbortSignal.timeout(1500) });
+    const r = await fetch(`${base()}/api/health`, { headers: await headers(), signal: AbortSignal.timeout(1500) });
+    if (r.status === 401) {
+      available = false;
+      status = { on: false, reason: "sign-in" };
+      return available;
+    }
     const h = r.ok ? await r.json() : {};
     // Older servers don't report keySet; treat missing as set.
     available = !!h.ok && h.keySet !== false;
@@ -73,7 +89,7 @@ export async function llmPredict(body: LlmRequest, signal?: AbortSignal): Promis
   try {
     const r = await fetch(`${base()}/api/predict`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await headers(true),
       body: JSON.stringify({ ...body, profile: profile && { ...profile, id: undefined } }),
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
@@ -94,7 +110,7 @@ export async function llmWarm(): Promise<void> {
   if (!(await llmAvailable())) return;
   void fetch(`${base()}/api/predict`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await headers(true),
     body: JSON.stringify({ task: "continue", text: "I", n: 1, profile: profile && { ...profile, id: undefined } }),
     signal: AbortSignal.timeout(10000),
   }).catch(() => {});
