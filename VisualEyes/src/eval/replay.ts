@@ -1,10 +1,11 @@
 // Offline replay of recorded sessions: rebuild features from raw landmarks, fit the app's own
 // model on the calibration dots, and score it on held-out dots. Pure; the CLI is
-// scripts/replay.ts. Mirrors main exactly: eye mode = 7 eye features, ridge λ=1; pointer mode =
-// 10 pointer features, POINTER_FLOOR, λ by leave-one-dot-out CV, per-dot outlier trimming.
+// scripts/replay.ts. Mirrors the app exactly: eye mode = 7 eye features, ridge λ=1; pointer mode =
+// POINTER_MODEL (yaw + pitch, straight-line ridge, λ=1), per-dot outlier trimming.
 import { estimateDistanceCm, type ViewingGeometry } from "../gaze/accuracy";
-import { GazeRegressor, chooseLambda, type Sample } from "../gaze/regression";
-import { POINTER_FLOOR } from "../gaze/engine";
+import { GazeRegressor, type Sample } from "../gaze/regression";
+import { POINTER_FLOOR, SIMPLE_POINTER, SIMPLE_POINTER_FLOOR, simplePointerInput, type PointerModel } from "../gaze/engine";
+import { chooseLambda } from "../gaze/regression";
 import { eyeVector, pointerVector } from "../gaze/features";
 import { trimOutlierIdx } from "../ui/calibration";
 import { frameFeatures, pointKey, type PointerMode, type RecordedSession } from "../record/format";
@@ -114,10 +115,15 @@ export interface FittedModel {
   lambda: number;
 }
 
-/** The model main fits in this pointer mode. */
-export function mainModel(s: PreparedSession, points = s.cal): FittedModel | null {
+/** The model the app fits in this pointer mode (pointer mode: the chosen pointer model, default "simple"). */
+export function mainModel(s: PreparedSession, points = s.cal, pointerModel: PointerModel = "simple"): FittedModel | null {
   const samples = toSamples(points);
   if (samples.length < 8) return null;
+  if (s.pointer === "pointer" && pointerModel === "simple") {
+    const r = new GazeRegressor(SIMPLE_POINTER.lambda, SIMPLE_POINTER.quadCount, SIMPLE_POINTER_FLOOR);
+    r.fit(samples.map((x) => ({ ...x, features: simplePointerInput(x.features) })));
+    return { predict: (f) => r.predict(simplePointerInput(f)), lambda: SIMPLE_POINTER.lambda };
+  }
   if (s.pointer === "pointer") {
     const cv = chooseLambda(samples, 4, POINTER_FLOOR);
     const lambda = Number.isFinite(cv.medianErrPx) ? cv.lambda : 1;
@@ -159,22 +165,32 @@ export interface DwellRow {
   stats: DwellStats;
 }
 
-/** Main's model scored on the check dots and on each drift check. */
-export function accuracyRows(s: PreparedSession): ResultRow[] {
-  const m = mainModel(s);
-  if (!m || !s.val.length) return [];
-  const source = `main ${s.pointer} model (λ=${m.lambda})`;
-  const base = { session: s.name, participant: s.participant, pointer: s.pointer, source };
-  const rows: ResultRow[] = [{ ...base, testSet: "check dots", stats: score(s, s.val, m.predict) }];
-  for (const [min, pts] of [...s.drift.entries()].sort((a, b) => a[0] - b[0])) rows.push({ ...base, testSet: `drift +${min} min`, stats: score(s, pts, m.predict) });
-  return rows;
+/** Models to compare for a session: eye mode has one; pointer mode reports both pointer models side by side. */
+function modelsFor(s: PreparedSession): [string, FittedModel | null][] {
+  if (s.pointer !== "pointer") return [["eye", mainModel(s)]];
+  return [
+    ["simple", mainModel(s, s.cal, "simple")],
+    ["original", mainModel(s, s.cal, "original")],
+  ];
 }
 
-/** Dwell simulation with main's cursor and dwell settings for this pointer mode. */
+/** The app's model(s) scored on the check dots and on each drift check. */
+export function accuracyRows(s: PreparedSession): ResultRow[] {
+  if (!s.val.length) return [];
+  return modelsFor(s).flatMap(([name, m]) => {
+    if (!m) return [];
+    const base = { session: s.name, participant: s.participant, pointer: s.pointer, source: `${name} (λ=${m.lambda})` };
+    const rows: ResultRow[] = [{ ...base, testSet: "check dots", stats: score(s, s.val, m.predict) }];
+    for (const [min, pts] of [...s.drift.entries()].sort((a, b) => a[0] - b[0])) rows.push({ ...base, testSet: `drift +${min} min`, stats: score(s, pts, m.predict) });
+    return rows;
+  });
+}
+
+/** Dwell simulation with the app's cursor and dwell settings for this pointer mode. */
 export function dwellRows(s: PreparedSession): DwellRow[] {
-  const m = mainModel(s);
-  if (!m) return [];
   const cfg = s.pointer === "pointer" ? POINTER_DWELL : EYE_DWELL;
   const dots = [...s.val, ...[...s.drift.values()].flat()];
-  return LAYOUTS.map((layout) => ({ session: s.name, pointer: s.pointer, source: `main ${s.pointer} (dwell ${cfg.dwellMs} ms)`, layout: layout.name, stats: simulateDwell(dots, m.predict, { ...cfg, layout }) }));
+  return modelsFor(s).flatMap(([name, m]) =>
+    m ? LAYOUTS.map((layout) => ({ session: s.name, pointer: s.pointer, source: name, layout: layout.name, stats: simulateDwell(dots, m.predict, { ...cfg, layout }) })) : [],
+  );
 }

@@ -24,6 +24,9 @@ button { font: inherit; color: inherit; }
 #output .pending { color: var(--accent); text-decoration: underline dotted; text-underline-offset: 6px; }
 #output .caret { display: inline-block; width: 3px; height: 1em; background: var(--accent); vertical-align: -0.12em; margin-left: 4px; animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
+/* One-step clear, sized like a key so the pointer can hit it; the top edge is easier to reach than the bottom. */
+#clear-btn { flex: 0 0 auto; min-width: clamp(110px, 12vw, 200px); }
+#clear-btn .lbl { font-size: clamp(18px, 2.2vw, 30px); letter-spacing: 0; }
 #controls { display: flex; flex-wrap: wrap; gap: 6px; align-content: center; max-width: 42%; }
 #controls button, menu button, .home-actions button { background: var(--key); border: 1px solid #30363d; border-radius: 10px; padding: 8px 12px; cursor: pointer; }
 #controls button:hover { background: var(--key-hi); }

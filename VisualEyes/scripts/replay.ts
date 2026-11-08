@@ -40,7 +40,7 @@ const f0 = (n: number) => (Number.isFinite(n) ? n.toFixed(0) : "–");
 const pct = (n: number) => (Number.isFinite(n) ? `${(n * 100).toFixed(0)}%` : "–");
 const short = (n: string) => (n.length > 30 ? `…${n.slice(-29)}` : n);
 
-console.log("\n## Accuracy on held-out dots (main's model for each recording's pointer mode)");
+console.log("\n## Accuracy on held-out dots (the app's model; pointer recordings show 'simple' (app) vs 'original')");
 console.table(
   acc.map((r) => ({
     session: short(r.session),
@@ -62,6 +62,7 @@ console.table(
   dwell.map((r) => ({
     session: short(r.session),
     pointer: r.pointer,
+    model: r.source,
     layout: r.layout,
     correct: pct(r.stats.correct),
     wrong: pct(r.stats.wrong),
@@ -77,13 +78,22 @@ const mean = (xs: number[]) => {
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN;
 };
 console.log("\n## Mean across recordings");
-const summary = (["pointer", "eye"] as const).flatMap((pointer) => {
-  const a = acc.filter((r) => r.pointer === pointer && r.testSet === "check dots");
+const modelOf = (src: string) => src.split(" (")[0];
+const groups = [...new Set(acc.map((r) => `${r.pointer}|${modelOf(r.source)}`))];
+const summary = groups.flatMap((g) => {
+  const [pointer, model] = g.split("|");
+  const a = acc.filter((r) => r.pointer === pointer && modelOf(r.source) === model && r.testSet === "check dots");
   if (!a.length) return [];
-  const d = (layout: string, k: "correct" | "wrong") => mean(dwell.filter((r) => r.pointer === pointer && r.layout.startsWith(layout)).map((r) => r.stats[k]));
+  const d = (layout: string, k: "correct" | "wrong") =>
+    mean(dwell.filter((r) => r.pointer === pointer && modelOf(r.source) === model && r.layout.startsWith(layout)).map((r) => r.stats[k]));
+  const better = pointer === "pointer" && model === "simple"
+    ? `${a.filter((r) => { const o = acc.find((x) => x.session === r.session && x.testSet === r.testSet && modelOf(x.source) === "original"); return o && r.stats.hitRate["6-chip (3x2)"] > o.stats.hitRate["6-chip (3x2)"]; }).length} of ${a.length}`
+    : "";
   return [
     {
       pointer,
+      model,
+      "beats original (6-chip)": better,
       recordings: a.length,
       "6-chip hit": pct(mean(a.map((r) => r.stats.hitRate["6-chip (3x2)"]))),
       "16-grid hit": pct(mean(a.map((r) => r.stats.hitRate["16-grid (4x4)"]))),

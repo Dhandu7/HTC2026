@@ -1,6 +1,6 @@
 // Turns tracker frames (or the mouse, for development) into a smoothed on-screen
 // gaze point. Owns calibration data and implicit recalibration.
-import { GazeRegressor, chooseLambda, type Sample } from "./regression";
+import { GazeRegressor, type Sample } from "./regression";
 import { PointFilter } from "./oneEuro";
 import type { FaceFrame } from "./tracker";
 import { checkPosition, type PositionCheck, type FacePos } from "./fixation";
@@ -35,6 +35,19 @@ const KEY_CAL_POINTER = "gazetype.calibration.pointer.v1";
 // Pointer-tracker feature order: yaw, pitch, tipX, tipY, tipRelX, tipRelY, roll, faceH, eyeMidX, eyeMidY.
 // The floors stop a near-constant feature from getting a huge weight after z-scoring.
 export const POINTER_FLOOR = [0.02, 0.02, 0.01, 0.01, 0.02, 0.02, 0.02, 0.01, 0.01, 0.01];
+/**
+ * Pointer model: a straight-line ridge fit on yaw and pitch only (entries 0 and 1 of the
+ * 10-feature pointer vector), λ = 1. On the first two recorded pointer sessions it beat the
+ * earlier 10-feature quadratic model (λ by cross-validation) on both: 6-chip hits 46% -> 65%
+ * mean; dwell-correct 25% -> 75% on the one file with long enough dots. It squashes vertical
+ * reach and the evidence is thin, so `npm run replay` keeps scoring both side by side on every
+ * pointer recording ("simple" vs "original"); switch back if the data says so.
+ * The full 10-feature vector is always recorded/exported.
+ */
+export type PointerModel = "simple" | "original";
+export const SIMPLE_POINTER = { inputs: [0, 1] as const, quadCount: 0, lambda: 1 };
+export const simplePointerInput = (v: number[]) => SIMPLE_POINTER.inputs.map((i) => v[i]);
+export const SIMPLE_POINTER_FLOOR = SIMPLE_POINTER.inputs.map((i) => POINTER_FLOOR[i]);
 /** Pointer-tracker cursor settings (also mirrored by the offline dwell simulation). */
 export const POINTER_FILTER = { minCutoff: 1.0, beta: 0.01 } as const;
 export const POINTER_STILL_RADIUS_PX = 10;
@@ -60,7 +73,7 @@ export class GazeEngine {
   /** Pointer tracker: 10 pointer features, no blink freeze, light smoothing, cursor kept on screen. Call before calibrating. */
   configurePointer() {
     this.pointerMode = true;
-    this.regressor = new GazeRegressor(1.0, 4, POINTER_FLOOR);
+    this.regressor = new GazeRegressor(SIMPLE_POINTER.lambda, SIMPLE_POINTER.quadCount, SIMPLE_POINTER_FLOOR);
     this.filter = new PointFilter(POINTER_FILTER.minCutoff, POINTER_FILTER.beta);
     this.anchor = null;
   }
@@ -103,6 +116,15 @@ export class GazeEngine {
       if (this.source !== "mouse") return;
       this.emit({ t: performance.now(), x: e.clientX, y: e.clientY, valid: true, blinkL: 0, blinkR: 0, source: "mouse" });
     });
+  }
+
+  private get simple() {
+    return this.pointerMode;
+  }
+
+  /** The fitted model's raw prediction (the simple pointer model sees yaw and pitch only). */
+  private model(features: number[]) {
+    return this.regressor.predict(this.simple ? simplePointerInput(features) : features);
   }
 
   get calibrated() {
@@ -150,7 +172,7 @@ export class GazeEngine {
       this.emit({ ...this.last, t: f.t, valid: this.calibrated && this.last.valid, blinkL: f.blinkL, blinkR: f.blinkR, source: "camera" });
       return;
     }
-    const p = this.regressor.predict(f.vector);
+    const p = this.model(f.vector);
     this.dbg.raw = p;
     // Drift correction from the last quick re-center.
     const q = { x: p.x + this.offset.x, y: p.y + this.offset.y };
@@ -189,7 +211,7 @@ export class GazeEngine {
     if (!features) return null;
     const pts = this.recent
       .filter((f) => f.t >= t0 && f.t <= t1 && !(f.blinkL > 0.45 && f.blinkR > 0.45))
-      .map((f) => this.regressor.predict(f.vector));
+      .map((f) => this.model(f.vector));
     const mx = pts.reduce((a, q) => a + q.x, 0) / pts.length;
     const my = pts.reduce((a, q) => a + q.y, 0) / pts.length;
     const spreadPx = Math.sqrt(pts.reduce((a, q) => a + (q.x - mx) ** 2 + (q.y - my) ** 2, 0) / pts.length);
@@ -204,7 +226,7 @@ export class GazeEngine {
   recenter(features: number[], x: number, y: number): number {
     this.implicit = [];
     this.refit();
-    const raw = this.regressor.predict(features);
+    const raw = this.model(features);
     this.offset = { x: x - raw.x, y: y - raw.y };
     this.filter.reset();
     return Math.hypot(this.offset.x, this.offset.y);
@@ -219,11 +241,6 @@ export class GazeEngine {
     this.implicit = [];
     this.offset = { x: 0, y: 0 };
     if (posRef !== undefined) this.posRef = posRef;
-    // Pointer tracker: choose the ridge strength by leave-one-dot-out cross-validation instead of a fixed guess.
-    if (this.pointerMode) {
-      const cv = chooseLambda(samples, 4, POINTER_FLOOR);
-      if (Number.isFinite(cv.medianErrPx)) this.regressor.lambda = cv.lambda;
-    }
     this.refit();
     try {
       localStorage.setItem(this.calKey, JSON.stringify(samples));
@@ -276,13 +293,13 @@ export class GazeEngine {
 
   private refit() {
     const all = [...this.calSamples, ...this.implicit];
-    if (all.length >= 8) this.regressor.fit(all);
+    if (all.length >= 8) this.regressor.fit(this.simple ? all.map((s) => ({ ...s, features: simplePointerInput(s.features) })) : all);
     this.filter.reset();
     this.anchor = null;
   }
 
   /** Predict without smoothing (used by validation). */
   predictRaw(features: number[]) {
-    return this.regressor.predict(features);
+    return this.model(features);
   }
 }

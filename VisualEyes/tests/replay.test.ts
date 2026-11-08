@@ -70,10 +70,10 @@ describe("replay, eye pointer", () => {
 describe("replay, pointer tracker", () => {
   const s = prepare(fakeSession("h", "quick", { gain: 1, bias: 0 }, 3, "pointer"), "h");
 
-  it("feeds main's pointer model the 10 pointer features, with λ chosen by cross-validation", () => {
+  it("records all 10 pointer features but fits the app's yaw + pitch straight-line model", () => {
     expect(s.pointer).toBe("pointer");
     expect(toSamples(s.cal)[0].features).toHaveLength(10);
-    expect([0.1, 0.3, 1, 3, 10, 30]).toContain(mainModel(s)!.lambda);
+    expect(mainModel(s)!.lambda).toBe(1);
   });
 
   it("points at held-out dots and selects them with the 2 s dwell", () => {

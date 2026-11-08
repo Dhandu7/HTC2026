@@ -41,6 +41,15 @@ const BLEND = ["eyeBlinkLeft", "eyeBlinkRight", "eyeLookUpLeft", "eyeLookUpRight
  * pointer "eye": the eyes rotate toward each dot, face still. pointer "pointer": the whole face
  * shifts toward each dot, eyes centred; check dots last 3.6 s so the 2 s dwell fits.
  */
+/** Column-major 4x4 matrix whose facePose() reads back as this yaw/pitch (radians), roll 0. */
+function rotation(yaw: number, pitch: number): number[] {
+  const m = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  m[2] = -Math.sin(yaw);
+  m[6] = Math.sin(pitch);
+  m[10] = Math.cos(pitch);
+  return m;
+}
+
 export function fakeSession(participant: string, mode: ProtocolMode, person: { gain: number; bias: number }, seed = 1, pointer: "eye" | "pointer" = "eye"): RecordedSession {
   let s = seed;
   const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
@@ -59,7 +68,9 @@ export function fakeSession(participant: string, mode: ProtocolMode, person: { g
       const gy = (0.5 - p.fy) * 2 * person.gain + (rnd() - 0.5) * 0.02;
       const bs = Float32Array.from([0.05, 0.05, Math.max(0, gy) * 0.5, Math.max(0, gy) * 0.5, Math.max(0, -gy) * 0.5, Math.max(0, -gy) * 0.5]);
       const lm = pointer === "pointer" ? fakeLandmarks(0, 0, gx * 0.05, -gy * 0.05) : fakeLandmarks(gx, gy, 0);
-      frames.push({ t: tShown + k * 33, ti, c: k >= 4, lm: f32ToB64(lm), bs: f32ToB64(bs), m: null, inferMs: 5 });
+      // Pointer mode also turns the face: yaw/pitch encoded in the transformation matrix (see facePose()).
+      const m = pointer === "pointer" ? rotation(gx * 0.3, gy * 0.2) : null;
+      frames.push({ t: tShown + k * 33, ti, c: k >= 4, lm: f32ToB64(lm), bs: f32ToB64(bs), m, inferMs: 5 });
     }
     return { ...p, x: p.fx * vw, y: p.fy * vh, vw, vh, tShown, tCollect0: tShown + 132, tCollect1: tShown + (nFrames - 1) * 33 };
   });

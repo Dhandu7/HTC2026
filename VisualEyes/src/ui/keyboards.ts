@@ -140,13 +140,20 @@ export class GazeTypeKeyboard implements Keyboard {
             : `<div class="key chip empty"></div>`,
         )
         .join("");
-      const groups = LETTER_GROUPS.map((g, i) => btn(`g:${i}`, g.toUpperCase(), "group")).join("");
+      const group = (i: number) => btn(`g:${i}`, LETTER_GROUPS[i].toUpperCase(), "group");
       const phrasesLabel = this.slots.length >= 2 ? "✨ Expand" : "💬 Phrases";
       const phrasesSub = this.slots.length >= 2 ? "initials → sentence" : "";
+      // ⌫ sits one step in from the edge (row 3, column 2): the pointer struggles to reach the
+      // corners, bottom-left worst of all, and delete is used constantly. The least-used
+      // letter group (WXYZ) takes the bottom-left corner instead. Letters keep reading order.
       root.innerHTML =
         chips +
-        groups +
+        [0, 1, 2, 3].map(group).join("") +
+        group(4) +
         btn("del", "⌫", "ctrl", this.slots.length ? "letter" : "word") +
+        group(5) +
+        group(6) +
+        group(7) +
         btn("space", "␣", "ctrl", this.slots.length ? "accept" : "") +
         btn("phrases", phrasesLabel, "ctrl", phrasesSub) +
         btn("menu", "☰ Done", "ctrl", this.host.overlay ? "speak / insert" : "speak");

@@ -167,7 +167,8 @@ function render() {
 }
 function measure() {
   if (!rectsDirty) return;
-  rects = [...board.querySelectorAll<HTMLElement>("[data-target]")].map((el) => {
+  // The board's keys plus the one-step Clear key in the top bar.
+  rects = [...document.querySelectorAll<HTMLElement>("#board [data-target], #clear-btn")].map((el) => {
     const r = el.getBoundingClientRect();
     return { id: el.dataset.target!, left: r.left, top: r.top, right: r.right, bottom: r.bottom };
   });
@@ -239,9 +240,14 @@ function acceptSentenceSamples() {
   sentenceSamples = [];
 }
 
+/** Find a gaze target: the top-bar Clear key or a key on the board. */
+const targetEl = (id: string) =>
+  id === "top:clear" ? $<HTMLElement>("#clear-btn") : board.querySelector<HTMLElement>(`[data-target="${CSS.escape(id)}"]`);
+
 function applySelection(id: string, t: number) {
-  const el = board.querySelector<HTMLElement>(`[data-target="${CSS.escape(id)}"]`);
-  const kind = kb.select(id);
+  const el = targetEl(id);
+  // Top-bar Clear = the keyboard's own clear action (GazeType clears and resets; baseline goes via doAction).
+  const kind = kb.select(id === "top:clear" ? "act:clear" : id);
   rec.event("select", { id, kind });
   if (kind === "delete" && pendingImplicit) {
     clearTimeout(pendingImplicit.timer);
@@ -315,7 +321,7 @@ function onGaze(g: GazePoint) {
     dwell.dwellMs = kb === gazeKb ? settings.dwellMs : settings.baselineDwellMs;
     out = dwell.update(g.t, target);
   }
-  const el = out.target ? board.querySelector<HTMLElement>(`[data-target="${CSS.escape(out.target)}"]`) : null;
+  const el = out.target ? targetEl(out.target) : null;
   if (lastHover && lastHover !== el) {
     lastHover.classList.remove("hover");
     lastHover.style.removeProperty("--p");
@@ -496,6 +502,10 @@ async function doAction(a: string) {
     return;
   }
   switch (a) {
+    case "clear":
+      kb.clear();
+      render();
+      break;
     case "speak":
       speak(text);
       if (text) acceptSentenceSamples();
@@ -639,6 +649,7 @@ $("#kb-toggle").addEventListener("click", () => {
   render();
 });
 $("#recal").addEventListener("click", () => void calibrate());
+$("#clear-btn").addEventListener("click", () => applySelection("top:clear", performance.now()));
 $("#record-btn").addEventListener("click", openRecord);
 
 // ---------- session recording (offline evaluation: npm run replay) ----------
