@@ -8,7 +8,7 @@
 
 **Hack the Change 2026** · Team ShayP (**P76W26**)
 
-VisualEyes is a webcam-only, conversation-first communicator for people who can't speak or use their hands, such as people living with ALS, cerebral palsy or locked-in syndrome. It runs on any laptop with a webcam. The user looks at a suggested reply, and VisualEyes speaks it aloud. Typing is the mechanism. The conversation is the product.
+VisualEyes lets people who can't speak or use their hands, such as people living with ALS, cerebral palsy or locked-in syndrome, hold a conversation using only a laptop webcam. A small head movement steers a pointer, a short dwell selects, and VisualEyes speaks the message aloud, in the user's own voice if they set one up. There is no special hardware, and video never leaves the laptop.
 
 ## The problem
 
@@ -16,12 +16,15 @@ Dedicated eye-tracking communication devices cost thousands of dollars and still
 
 ## What VisualEyes does
 
-- **Webcam-only gaze control.** MediaPipe face and iris landmarks, with a 9-point calibration. Gaze tracking runs on-device, so no video leaves the laptop.
-- **Built for imperfect tracking.** Large targets, dwell selection (~700 ms) and a prediction-first layout, so a few degrees of error doesn't break the experience.
-- **Conversation-first suggestions.** Claude proposes replies based on who the user is talking to and the topic, so most messages take one selection.
-- **Learns your voice.** Your own phrases, jokes and the names of the people you love get surfaced first over time.
-- **Hears the other side.** With "Listen to the other person" on, the partner's speech is transcribed in the browser and Claude proposes replies to it, so answering is one glance. What was heard shows on screen. The microphone is muted while the app speaks, and no audio is stored.
-- **Local support.** Keenable surfaces real accessible activities and ALS support groups in Calgary.
+- **Head pointer from any webcam.** MediaPipe Face Landmarker tracks the face on-device at about 30 fps. A 20-dot calibration (about 55 s) fits a ridge-regression model from head yaw and pitch to the screen, then a One Euro filter keeps the pointer steady.
+- **Built for imperfect tracking.** The app opens on 6 large ready-to-speak phrases. Selection is by dwell (1.5 s by default) or a deliberate blink, and targets snap and hold so small wobbles don't cause wrong picks.
+- **Prediction-first typing.** A 4×4 keyboard of letter groups with word completion, next-word prediction and a personal phrase store that learns every sentence the user speaks. Abbreviation expansion turns one key per word into a full sentence.
+- **AI reply suggestions.** Claude suggests whole sentences that match the user's profile and writing style. Only text is sent, never video.
+- **Hears the other side.** With "Listen to the other person" on, the partner's speech is transcribed in the browser and Claude offers replies on the home screen, so answering takes one selection. What was heard shows on screen, the microphone is muted while the app speaks, and no audio is stored.
+- **Your own voice.** "My voice" clones the user's voice from their recordings with ElevenLabs. Without it, the browser's system voice speaks.
+- **Profiles and sign-in.** Each user has their own words, phrases and calibration. Caregivers can add names of people, an about note and writing samples. Auth0 sign-in syncs settings and profile between devices.
+- **Works over any app.** An Electron overlay opens with a global shortcut (`Ctrl+Shift+G` / `⌘⇧G`), an offline voice command ("gaze type") or by aiming at the top-right corner, then pastes the sentence into the app you were using.
+- **Measured, not guessed.** Sessions can be recorded and replayed offline to compare tracking changes, and a built-in benchmark reports words per minute, selections per character and errors.
 
 ## Measured results
 
@@ -43,59 +46,84 @@ The target test is what using the app feels like: the user sees the pointer and 
 ```mermaid
 flowchart LR
     cam["Webcam"] --> mp["MediaPipe<br/>Face Landmarker"]
-    mp --> head["Head pointer"]
-    head --> kb["Keyboard<br/>dwell to select"]
+    mp --> head["Head pointer<br/>ridge model + One Euro"]
+    head --> kb["Keyboard<br/>dwell or blink"]
+    kb --> pred["Word prediction<br/>personal phrases"]
+    pred --> kb
     kb --> voice["ElevenLabs<br/>your own voice"]
     voice --> out["Spoken aloud"]
-    llm["Claude<br/>reply suggestions"] <-.-> kb
+    llm["Claude<br/>sentence suggestions"] <-.-> kb
     mic["Partner's speech<br/>browser speech recognition"] -.-> llm
 
     classDef local fill:#EEF5F6,stroke:#0B4F5C,color:#0B4F5C,stroke-width:2px
     classDef remote fill:#FFF1EC,stroke:#E4572E,color:#7A2A12,stroke-width:2px
     classDef result fill:#0B4F5C,stroke:#0B4F5C,color:#FFFFFF,stroke-width:2px
-    class cam,mp,head,kb local
+    class cam,mp,head,kb,pred local
     class llm,voice,mic remote
     class out result
 ```
 
-Teal runs on the laptop, so video never leaves it. Orange is a cloud service that only receives text, or, for the optional partner listening, the microphone audio the browser's own speech recognition transcribes.
+Teal runs on the laptop, so video never leaves it. Orange is a cloud service that only receives text, except the optional partner listening, where Chrome's speech recognition sends the microphone audio to Google to be transcribed. If ElevenLabs isn't set up, the system voice speaks instead.
 
-| Layer | Tech |
+## Built with
+
+| Area | Technology |
 |---|---|
-| Gaze tracking | MediaPipe Face Landmarker, iris landmarks, One Euro smoothing |
-| Frontend | [React / Vite] |
-| Suggestions | Claude API |
-| Speech | Web Speech API (partner transcription), browser TTS |
-| Backend | [AWS / Supabase] |
-| Automation | n8n |
-| Local resources | Keenable |
+| Languages | TypeScript, Python, HTML, CSS |
+| Front end | Vite, plain TypeScript (no UI framework) |
+| Desktop overlay | Electron |
+| Face tracking | MediaPipe Tasks Vision (Face Landmarker), running in the browser |
+| Pointer model | Ridge regression and One Euro filter, written from scratch |
+| Offline voice commands | Vosk (browser WebAssembly build) |
+| Partner listening | Web Speech API (browser speech recognition) |
+| AI suggestions | Claude API (Anthropic SDK) through a small Node.js proxy |
+| Voice cloning and speech | ElevenLabs API, with the browser's speech synthesis as fallback |
+| Voice and account service | Python, FastAPI, boto3 |
+| Sign-in | Auth0 |
+| Database | Amazon DynamoDB |
+| Cloud | AWS EC2 (hosting), AWS Secrets Manager (API keys) |
+| CI/CD | GitHub Actions (deploys to EC2 on every merge to `main`) |
+| Testing | Vitest, pytest |
 
 ## Getting started
 
 ```bash
-git clone [repo-url]
-cd gazetype
-cp .env.example .env     # add your API keys
+git clone https://github.com/Dhandu7/HTC2026.git
+cd HTC2026/VisualEyes
 npm install
-npm run dev
+npm run setup          # downloads the face model so it works offline
+npm run dev            # http://localhost:5173
 ```
 
-Open the app in Chrome, allow webcam access, and complete the 9-point calibration. Sit about 50–70 cm from the screen in even lighting for the best results.
+Open it in Chrome, follow the setup screens, allow the camera and point your head at each calibration dot as it appears. Sit about 50 to 70 cm from the screen in even lighting.
 
-**Fallbacks:** if gaze tracking is unreliable in your lighting, switch to pointer mode or the keyboard mode in settings. The conversation engine works the same way in both.
+Optional extras:
+
+```bash
+cp .env.example .env   # add ANTHROPIC_API_KEY and/or ELEVENLABS_API_KEY
+npm run dev:all        # app + Claude suggestion proxy
+npm run dev:voice      # app + Claude proxy + own-voice service
+npm run overlay        # Electron overlay
+npm test               # unit tests
+```
+
+No camera? **Mouse mode** runs the same interface with hover-to-dwell. Developer details, file-by-file notes and the recording workflow are in [VisualEyes/README.md](VisualEyes/README.md).
 
 ## Privacy and safety
 
-- Video is processed in the browser and never uploaded.
-- Only the text of selected messages and the user's learned phrases are stored.
-- VisualEyes is a communication aid, not a medical device.
+- Video is processed on the device and never uploaded.
+- Learned words, phrases and calibration stay on the device. Only settings and the profile sync when signed in.
+- Partner listening is off by default. When on, Chrome's speech recognition sends the microphone audio to Google to be transcribed. VisualEyes stores no audio.
+- Claude and ElevenLabs receive text only. Voice recordings go to ElevenLabs only after the user agrees to a consent screen, and the voice can be deleted at any time.
+- A slur filter blocks slurs before anything is spoken.
+- VisualEyes is a communication aid prototype, not a medical device.
 
 ## Roadmap
 
-- Swipe-style dwell-free gaze typing
-- Multi-language support
+- Test with people living with ALS and other motor impairments, with their clinicians
+- Dwell-free swipe typing
+- More languages (English only today)
 - Caregiver mode and emergency phrases
-- Validation with ALS clinicians and users
 
 ## Team
 
@@ -110,7 +138,3 @@ Team **P76W26** at **Hack the Change 2026**.
 | Rajvir | [@Rajvir3104](https://github.com/Rajvir3104) |
 
 Built at Hack the Change 2026, November 2026.
-
-## License
-
-[MIT]
