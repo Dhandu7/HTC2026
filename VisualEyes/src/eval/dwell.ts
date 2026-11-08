@@ -24,17 +24,11 @@ export interface DwellConfig {
   clamp: boolean;
   /** Pointer mode: predictions this far (px) off the screen are invalid (nothing selected). Infinity = off. */
   offscreenPx: number;
-  /** Eye mode: freeze the cursor while both eyes are closed. */
+  /** Freeze the cursor while both eyes are closed (off for the pointer). */
   freezeOnBlink: boolean;
 }
 
 const BASE = { snapPx: 36, switchMs: 90, gapFrac: 0.06 };
-/**
- * main.ts eye mode: TargetTracker(36, 90), DwellSelector(2000); engine.ts PointFilter(0.8, 0.015),
- * blink freeze, cursor pinned to the screen and no selection > 40 px off it (clampToView). The app
- * applies the 40 px test after smoothing; the simulation applies it before (close enough to rank changes).
- */
-export const EYE_DWELL: Omit<DwellConfig, "layout"> = { ...BASE, dwellMs: 2000, minCutoff: 0.8, beta: 0.015, leashPx: 0, clamp: true, offscreenPx: 40, freezeOnBlink: true };
 /** main.ts pointer mode: same tracker/dwell; engine.ts configurePointer(): PointFilter(1.0, 0.01), clamp, 10 px leash, 300 px off-screen cut-off, no blink freeze. */
 export const POINTER_DWELL: Omit<DwellConfig, "layout"> = {
   ...BASE,
@@ -113,7 +107,7 @@ export function simulatePoint(p: PreparedPoint, predict: Predictor, cfg: DwellCo
         target = tracker.update(f.t, rects, s.x, s.y);
       }
     } else if (f.v && f.closed && last) {
-      // Eye mode, eyes shut: the app holds the cursor where it was.
+      // freezeOnBlink: eyes shut, hold the cursor where it was.
       target = tracker.update(f.t, rects, last.x, last.y);
     }
     const out = dwell.update(f.t, target);

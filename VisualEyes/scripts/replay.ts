@@ -1,7 +1,6 @@
 // Offline evaluation of recorded eye / pointer-tracker sessions.
 //   npm run replay -- recordings/*.json                 -> per-recording tables + mean per pointer mode
 //   npm run replay -- recordings/*.json --json out.json
-//   --as-pointer: score every file with the pointer pipeline (eye recordings = plumbing test only)
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { SESSION_FORMAT, type RecordedSession } from "../src/record/format";
@@ -10,30 +9,29 @@ import { accuracyRows, dwellRows, prepare, targetRows, trackingLost, type DwellR
 const args = process.argv.slice(2);
 const jsonIdx = args.indexOf("--json");
 const jsonOut = jsonIdx >= 0 ? args[jsonIdx + 1] : null;
-const asPointer = args.includes("--as-pointer");
 const files = args.filter((a, i) => a.endsWith(".json") && !(jsonIdx >= 0 && i === jsonIdx + 1));
 
 if (!files.length) {
-  console.error("usage: npm run replay -- <session.json>... [--as-pointer] [--json results.json]");
+  console.error("usage: npm run replay -- <session.json>... [--json results.json]");
   process.exit(1);
 }
 
 const sessions = files.map((f) => {
   const s = JSON.parse(readFileSync(f, "utf8")) as RecordedSession;
   if (s.format !== SESSION_FORMAT) throw new Error(`${f}: not a ${SESSION_FORMAT} file`);
-  return prepare(s, basename(f, ".json"), { asPointer });
+  return prepare(s, basename(f, ".json"));
 });
 
 for (const s of sessions) {
   const m = s.session.meta;
   console.log(
-    `• ${s.name}: ${m.participant}, ${s.pointer} mode${s.pointer !== s.recordedPointer ? ` (recorded as ${s.recordedPointer})` : ""}, ${m.mode}, ` +
+    `• ${s.name}: ${m.participant}, ${s.recordedPointer === "eye" ? "eye-tracker recording" : "pointer"}, ${m.mode}, ` +
       `${s.cal.length} cal + ${s.val.length} check dots, ${s.session.env.screenWidth}x${s.session.env.screenHeight}, ` +
       `${(s.lostFrac * 100).toFixed(1)}% frames lost` +
-      (trackingLost(s) ? `  ⚠ EXCLUDED: face lost on ${s.lostCheckDots} of ${s.val.length} check dots` : ""),
+      (s.recordedPointer === "eye" ? "  – SKIPPED: eye-tracker mode was removed" : trackingLost(s) ? `  ⚠ EXCLUDED: face lost on ${s.lostCheckDots} of ${s.val.length} check dots` : ""),
   );
 }
-const scored = sessions.filter((s) => !trackingLost(s));
+const scored = sessions.filter((s) => s.recordedPointer !== "eye" && !trackingLost(s));
 
 const acc = scored.flatMap(accuracyRows);
 const dwell = scored.flatMap(dwellRows);

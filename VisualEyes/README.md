@@ -1,10 +1,10 @@
 # VocalEyes
 
-A webcam-only eye-gaze communicator for people who can't use their hands or voice (ALS, cerebral palsy, locked-in syndrome). It needs no infrared tracker and runs on any laptop. Typing is prediction-first, the targets are large enough for webcam error, and all vision processing stays on the device.
+A webcam-only, hands-free communicator for people who can't use their hands or voice. It uses a webcam **pointer tracker** (no special hardware) and runs on any laptop. It opens on six large ready-to-speak phrases, typing is prediction-first, targets are large enough for webcam error, and all vision processing stays on the device.
 
 It runs in two ways:
 
-- **Browser app.** Open a page and start typing with your eyes. This is the easiest way for judges to try it.
+- **Browser app.** Open a page, choose **🎯 Pointer tracker** and start. This is the easiest way for judges to try it.
 - **Electron overlay.** An always-on-top keyboard that opens over any app with a **global keybind** (`⌘⇧G` / `Ctrl+Shift+G`), an **offline voice command** ("gaze type"), or by **looking at the top-right corner**. **Insert** pastes the sentence into the app you were using.
 
 > Communication aid prototype. Not a medical device.
@@ -39,20 +39,19 @@ On macOS the overlay asks for Camera access. Auto-paste needs **Accessibility** 
 
 ```
 webcam ─► MediaPipe Face Landmarker (478 landmarks + blendshapes + face pose, on-device, ~30 fps)
-        ─► features: iris-in-eye (x,y), eyeLook blendshapes, face yaw/pitch, face position/scale
-        ─► ridge regression (z-scored, quadratic gaze terms) fit by 9-point calibration
-        ─► One Euro filter ─► target tracker (snap + hysteresis) ─► dwell | deliberate-blink selector
+        ─► pointer features (yaw, pitch; 10 are recorded) ─► straight-line ridge model fit by a 20-dot calibration
+        ─► One Euro filter + small leash, kept on screen ─► target tracker (snap + hysteresis) ─► dwell | deliberate-blink selector
         ─► keyboard ─► prediction engine (+ optional LLM) ─► speak / insert / learn
 ```
 
 | Piece | File | Notes |
 |---|---|---|
 | Tracking | `src/gaze/tracker.ts` | MediaPipe Tasks Vision. Uses local wasm/model if present, otherwise the CDN. GPU delegate with CPU fallback. |
-| Features | `src/gaze/features.ts` | Pure function and unit-tested. The cursor freezes during blinks. |
-| Calibration | `src/ui/calibration.ts` | 9 calibration points and 4 validation points take about 25 s. Reports **mean error and precision in degrees**, with the assumed screen size and distance shown. |
+| Features | `src/gaze/features.ts` | Pure function and unit-tested. Extracts the full feature vector (its layout is kept so recordings stay comparable); the pointer uses `pointerVector()`, and its model reads yaw and pitch. Blinks don't move or freeze the pointer. The eye-tracker mode was removed; it lives on the parked `improve-eyetracking-confidence` branch. |
+| Calibration | `src/ui/calibration.ts` | 20 dots (2 s each) plus 4 check dots (3.5 s each), about 55 s. Reports the **hit rate for 6 large buttons and the 4×4 grid**, a direction check, and error in degrees with the assumed screen size and distance shown; warns instead if the face was lost during the check. |
 | Drift | `src/gaze/engine.ts` | **Implicit recalibration**: a selection that isn't undone within 2 s becomes a down-weighted training sample at the target's centre. |
 | Accuracy units | `src/gaze/accuracy.ts` | Converts px to degrees. Viewing distance is estimated from iris size (11.7 mm) and can be overridden. |
-| Selection | `src/input/selection.ts` | **Dwell** (700 ms on the VocalEyes keyboard, 1000 ms on the baseline). **Deliberate blink** (dwell-free) needs both eyes closed for 350–1500 ms after aiming for at least 150 ms. Involuntary blinks are **counted and reported**, not hidden. |
+| Selection | `src/input/selection.ts` | **Dwell** (2 s by default, set in ⚙ Settings). **Deliberate blink** (dwell-free) needs both eyes closed for 350–1500 ms after aiming for at least 150 ms. Involuntary blinks are **counted and reported**, not hidden. |
 | Home | `src/ui/keyboards.ts` | The app opens on **6 large chips (3×2)**: 5 ready-to-speak phrases (one selection speaks a message) and **⌨ Keyboard**, which opens the 4×4 grid. Recorded pointer sessions hit 6 large buttons far more often than the 16-key grid (mean 59% vs 32%). Phrases come from a pluggable source (`homeSource`) so the conversation engine can supply replies. **🗑 Clear** (top bar, or ☰ Done → 🏠 Home) clears the text and returns here. Benchmarks skip it. |
 | Keyboard | `src/ui/keyboards.ts` | The VocalEyes keyboard has **16 targets in a 4×4 grid**: 4 prediction chips, 8 letter-group keys, delete, accept, phrases/expand, and done. The baseline is a dwell QWERTY. |
 | Prediction | `src/predict/engine.ts` | Decodes ambiguous letter-group keys through a **key-sequence index** (one bucket lookup per key, ~0.4 ms), completes words, and predicts the next word from personal **trigram → bigram** context. Personal and global frequencies are blended, with the personal share growing as the user talks; personal words decay over 30 days; a suggestion picked and deleted within 2 s is ranked lower in that context. Keeps a **personal phrase store** that learns every sentence you speak or insert. **Abbreviation expansion** turns one key per word into a full sentence. |
@@ -63,23 +62,23 @@ webcam ─► MediaPipe Face Landmarker (478 landmarks + blendshapes + face pose
 | Overlay | `electron/main.mjs` | Transparent, click-through when collapsed, non-focusable so the target app keeps focus. Global shortcut, tray menu, and paste via the OS. |
 | Voice | `src/input/voice.ts` | Vosk wasm with a fixed grammar ("gaze type", "open/hide keyboard", "read it out"). Works offline, and other speech can't trigger it. |
 
-### Recording and replaying sessions (pointer tracker and eye tracker)
+### Recording and replaying sessions
 
 Tracking changes are judged on recorded data, averaged over **all** recordings, not on one live run.
 
-1. Start the **🎯 Pointer tracker** (or 👁 Eye tracker) and press **● Record**. The recording follows the active mode. Use one Participant ID per person.
+1. Start the **🎯 Pointer tracker** and press **● Record**. Use one Participant ID per person.
    - **Quick trial (~1.5 min):** 25-dot grid + 8 check dots. In pointer mode the check dots stay up 3.5 s so the 2 s dwell can be simulated.
-   - **Target test (~1.5 min, closed loop):** after calibrating, the live pointer is visible and you steer it onto each highlighted button until the dwell selects something: all 6 buttons of the 3×2 layout, then 8 keys of the 4×4 grid including all four corners. It saves `gazetarget-<pointer|eye>-<id>-<time>.json`, and the replay reports correct / wrong / timed out, corners, and time per selection. This is the number that matches real use; the check dots measure blind aiming.
+   - **Target test (~1.5 min, closed loop):** after calibrating, the live pointer is visible and you steer it onto each highlighted button until the dwell selects something: all 6 buttons of the 3×2 layout, then 8 keys of the 4×4 grid including all four corners. It saves `gazetarget-pointer-<id>-<time>.json`, and the replay reports correct / wrong / timed out, corners, and time per selection. This is the number that matches real use; the check dots measure blind aiming.
    - **Full (~12 min):** adds 16 check dots and drift checks at +2, +5, +10 min. **Short:** 9 dots + 16 check dots, for strangers.
-2. Every **◎ Calibrate** also downloads `gazecal-<pointer|eye>-<id>-<time>.json` when "Save each calibration" is on in ⚙ Settings (default on). The calibration toast now also shows the **hit rate for 6 large buttons and for the 4×4 grid** on the check dots (or a warning to recalibrate if the face was lost on half the check dots). In pointer mode the 4 check dots stay up 3.5 s, so every calibration also gives dwell-simulation data.
+2. Every **◎ Calibrate** also downloads `gazecal-pointer-<id>-<time>.json` when "Save each calibration" is on in ⚙ Settings (default on). The calibration toast now also shows the **hit rate for 6 large buttons and for the 4×4 grid** on the check dots (or a warning to recalibrate if the face was lost on half the check dots). In pointer mode the 4 check dots stay up 3.5 s, so every calibration also gives dwell-simulation data.
 3. Move the files to `VisualEyes/recordings/` (git-ignored) and run `npm run replay -- recordings/*.json` (`--json out.json` saves the rows). It rebuilds the features from the raw landmarks and fits **exactly the app's model** for each file's mode (pointer: yaw + pitch, straight-line ridge, λ=1, per-dot outlier trimming; eye: 7 features, ridge λ=1). Pointer recordings are also scored with the **original** 10-feature quadratic model, side by side, with a "beats original on N of M" count, so the model choice keeps being checked against data. It prints per recording and as a **mean per pointer mode**:
    - hit rates (4-chip, 6-chip, 16-grid), x/y offset, jitter, on the held-out check dots and drift checks;
    - a **dwell simulation** with main's cursor pipeline (pointer: smoothing, clamp, 10 px leash, off-screen cut-off) and 2 s dwell: correct / wrong / timed out.
-   - `--as-pointer` forces the pointer pipeline on eye recordings (plumbing test only).
+   - Files recorded with the old eye-tracker mode are listed as skipped.
 
 ### Why a 4×4 grid of letter groups and not QWERTY
 
-The best webcam gaze estimates have about 1.3–1.8° error. A typical student implementation gets 3° or more. At 60 cm, 3° is about 3.1 cm, so a 26-key QWERTY on a laptop screen can't be hit reliably. Sixteen large targets can. Prediction makes up for the ambiguous keys: one key press per letter, and usually 1–3 presses before the word appears as a chip. See [docs/RESEARCH.md](docs/RESEARCH.md).
+A webcam pointer can't hit a 26-key QWERTY on a laptop screen reliably; large targets work far better (recorded pointer sessions: 6 large buttons ≈ 57% of frames on target vs 16 keys ≈ 31%, so the app opens on 6 and keeps the 16-key grid one step away). Prediction makes up for the ambiguous keys: one key press per letter, and usually 1–3 presses before the word appears as a chip. See [docs/RESEARCH.md](docs/RESEARCH.md).
 
 ## Demo script (side-by-side)
 
@@ -88,7 +87,7 @@ The best webcam gaze estimates have about 1.3–1.8° error. A typical student i
 3. Toggle **Keyboard → Baseline QWERTY**. The same sentence stays loaded. Type it again.
 4. Open **📊 Results**. Compare WPM, selections per character, error and false selections. **Export JSON** for the slide.
 5. Type a sentence and speak it. Then start it again: it now comes back as a **phrase chip** after one word, so the store is learning.
-6. Overlay: press `⌘⇧G` over Notes or Slack, type with your eyes, choose **☰ Done → 📋 Insert**, and the text appears in that app.
+6. Overlay: press `⌘⇧G` over Notes or Slack, type with the pointer, choose **☰ Done → 📋 Insert**, and the text appears in that app.
 
 Let judges try it. Mouse mode (hover to dwell) runs the same UI and metrics with no camera.
 

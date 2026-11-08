@@ -56,17 +56,6 @@ describe("evaluate", () => {
   });
 });
 
-describe("replay, eye pointer", () => {
-  it("uses main's eye model and scores held-out dots", () => {
-    const s = prepare(fakeSession("a", "full", { gain: 1, bias: 0 }), "a");
-    expect(s.pointer).toBe("eye");
-    expect(mainModel(s)!.lambda).toBe(1);
-    const rows = accuracyRows(s);
-    expect(rows.map((r) => r.testSet)).toEqual(["check dots", "drift +2 min", "drift +5 min", "drift +10 min"]);
-    expect(rows[0].stats.hitRate["6-chip (3x2)"]).toBeGreaterThan(0.9);
-  });
-});
-
 describe("replay, pointer tracker", () => {
   const s = prepare(fakeSession("h", "quick", { gain: 1, bias: 0 }, 3, "pointer"), "h");
 
@@ -81,12 +70,6 @@ describe("replay, pointer tracker", () => {
     const six = dwellRows(s).find((r) => r.layout.startsWith("6"))!;
     expect(six.stats.n).toBe(8);
     expect(six.stats.correct).toBeGreaterThan(0.85);
-  });
-
-  it("can force the pointer pipeline on an eye recording (plumbing test)", () => {
-    const forced = prepare(fakeSession("a", "quick", { gain: 1, bias: 0 }), "a", { asPointer: true });
-    expect(forced.pointer).toBe("pointer");
-    expect(forced.recordedPointer).toBe("eye");
   });
 
   it("lays buttons out around the dot", () => {

@@ -83,7 +83,7 @@ export function buildProtocol(mode: ProtocolMode, rnd: () => number = Math.rando
   return out;
 }
 
-/** Which pointer the session was recorded with. Older files have none = "eye". */
+/** Mode the session was recorded with. "eye" (or none) = the removed eye-tracker mode; kept so old files still load. */
 export type PointerMode = "eye" | "pointer";
 
 /**

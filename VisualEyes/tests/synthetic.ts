@@ -50,7 +50,7 @@ function rotation(yaw: number, pitch: number): number[] {
   return m;
 }
 
-export function fakeSession(participant: string, mode: ProtocolMode, person: { gain: number; bias: number }, seed = 1, pointer: "eye" | "pointer" = "eye"): RecordedSession {
+export function fakeSession(participant: string, mode: ProtocolMode, person: { gain: number; bias: number }, seed = 1, pointer: "eye" | "pointer" = "pointer"): RecordedSession {
   let s = seed;
   const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
   const protocol = buildProtocol(mode, rnd);

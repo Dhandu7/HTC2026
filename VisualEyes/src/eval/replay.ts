@@ -1,15 +1,16 @@
 // Offline replay of recorded sessions: rebuild features from raw landmarks, fit the app's own
 // model on the calibration dots, and score it on held-out dots. Pure; the CLI is
-// scripts/replay.ts. Mirrors the app exactly: eye mode = 7 eye features, ridge λ=1; pointer mode =
-// POINTER_MODEL (yaw + pitch, straight-line ridge, λ=1), per-dot outlier trimming.
+// scripts/replay.ts. Mirrors the app exactly: the pointer model (yaw + pitch, straight-line ridge,
+// λ=1) with per-dot outlier trimming; the original 10-feature model is scored alongside it.
+// Files recorded with the removed eye-tracker mode are skipped by the CLI.
 import { estimateDistanceCm, type ViewingGeometry } from "../gaze/accuracy";
 import { GazeRegressor, type Sample } from "../gaze/regression";
 import { POINTER_FLOOR, SIMPLE_POINTER, SIMPLE_POINTER_FLOOR, simplePointerInput, type PointerModel } from "../gaze/engine";
 import { chooseLambda } from "../gaze/regression";
-import { eyeVector, pointerVector } from "../gaze/features";
+import { pointerVector } from "../gaze/features";
 import { MIN_CHECK_FRAMES, trimOutlierIdx } from "../ui/calibration";
 import { frameFeatures, pointKey, type PointerMode, type RecordedSession } from "../record/format";
-import { EYE_DWELL, POINTER_DWELL, simulateDwell, type DwellStats } from "./dwell";
+import { POINTER_DWELL, simulateDwell, type DwellStats } from "./dwell";
 import { LAYOUTS, evaluate, type EvalStats, type PointPredictions, type XY } from "./metrics";
 
 /** Frames for one target, as model input vectors. Targets are in viewport fractions. */
@@ -29,7 +30,7 @@ export interface PreparedSession {
   name: string;
   participant: string;
   pointer: PointerMode;
-  /** Pointer the file was recorded with (differs from `pointer` when forced with asPointer). */
+  /** Mode the file was recorded with: "eye" = the removed eye-tracker mode (not scored). */
   recordedPointer: PointerMode;
   session: RecordedSession;
   geometry: ViewingGeometry;
@@ -37,7 +38,7 @@ export interface PreparedSession {
   val: PreparedPoint[];
   /** Drift checks keyed by minutes after validation. */
   drift: Map<number, PreparedPoint[]>;
-  /** Fraction of collection frames with no face (or, in eye mode, closed eyes). */
+  /** Fraction of collection frames with no face. */
   lostFrac: number;
   /** Check dots with fewer than 8 usable frames (face lost): if half or more, the session is unusable. */
   lostCheckDots: number;
@@ -46,17 +47,12 @@ export interface PreparedSession {
 /** Same rule as the app (MIN_CHECK_FRAMES in calibration.ts): half or more check dots lost = don't score. */
 export const trackingLost = (s: PreparedSession) => s.val.length > 0 && s.lostCheckDots * 2 >= s.val.length;
 
-export interface PrepareOptions {
-  /** Score with the pointer pipeline even if the file was recorded in eye mode (plumbing tests). */
-  asPointer?: boolean;
-}
-
 const BLINK = 0.45;
 
-export function prepare(session: RecordedSession, name: string, opts: PrepareOptions = {}): PreparedSession {
+export function prepare(session: RecordedSession, name: string): PreparedSession {
   const recordedPointer: PointerMode = session.meta.pointer ?? "eye";
-  const pointer: PointerMode = opts.asPointer ? "pointer" : recordedPointer;
-  const toVec = pointer === "pointer" ? pointerVector : eyeVector;
+  const pointer: PointerMode = "pointer";
+  const toVec = pointerVector;
   const pts: PreparedPoint[] = session.targets.map((t) => ({ fx: t.fx, fy: t.fy, vw: t.vw, vh: t.vh, vectors: [], timeline: [], tShown: t.tShown, tEnd: t.tCollect1 }));
   const iris: number[] = [];
   let total = 0;
@@ -69,8 +65,8 @@ export function prepare(session: RecordedSession, name: string, opts: PrepareOpt
     pts[f.ti].timeline.push({ t: f.t, v: feats ? toVec(feats.vector) : null, closed });
     if (!f.c) continue;
     total++;
-    // Same rule as the app's calibration: no face = no sample; eye mode also drops closed eyes.
-    if (!feats || (pointer === "eye" && closed)) {
+    // Same rule as the app's calibration: no face = no sample.
+    if (!feats) {
       lost++;
       continue;
     }
@@ -122,25 +118,20 @@ export interface FittedModel {
   lambda: number;
 }
 
-/** The model the app fits in this pointer mode (pointer mode: the chosen pointer model, default "simple"). */
+/** The pointer model: "simple" (what the app uses) or "original" (10 features, quadratic, λ by CV). */
 export function mainModel(s: PreparedSession, points = s.cal, pointerModel: PointerModel = "simple"): FittedModel | null {
   const samples = toSamples(points);
   if (samples.length < 8) return null;
-  if (s.pointer === "pointer" && pointerModel === "simple") {
+  if (pointerModel === "simple") {
     const r = new GazeRegressor(SIMPLE_POINTER.lambda, SIMPLE_POINTER.quadCount, SIMPLE_POINTER_FLOOR);
     r.fit(samples.map((x) => ({ ...x, features: simplePointerInput(x.features) })));
     return { predict: (f) => r.predict(simplePointerInput(f)), lambda: SIMPLE_POINTER.lambda };
   }
-  if (s.pointer === "pointer") {
-    const cv = chooseLambda(samples, 4, POINTER_FLOOR);
-    const lambda = Number.isFinite(cv.medianErrPx) ? cv.lambda : 1;
-    const r = new GazeRegressor(lambda, 4, POINTER_FLOOR);
-    r.fit(samples);
-    return { predict: (f) => r.predict(f), lambda };
-  }
-  const r = new GazeRegressor(1.0, 4);
+  const cv = chooseLambda(samples, 4, POINTER_FLOOR);
+  const lambda = Number.isFinite(cv.medianErrPx) ? cv.lambda : 1;
+  const r = new GazeRegressor(lambda, 4, POINTER_FLOOR);
   r.fit(samples);
-  return { predict: (f) => r.predict(f), lambda: 1 };
+  return { predict: (f) => r.predict(f), lambda };
 }
 
 export function score(s: PreparedSession, points: PreparedPoint[], predict: Predictor): EvalStats {
@@ -172,9 +163,8 @@ export interface DwellRow {
   stats: DwellStats;
 }
 
-/** Models to compare for a session: eye mode has one; pointer mode reports both pointer models side by side. */
+/** Models to compare for a session: the app's "simple" model and the "original" one, side by side. */
 function modelsFor(s: PreparedSession): [string, FittedModel | null][] {
-  if (s.pointer !== "pointer") return [["eye", mainModel(s)]];
   return [
     ["simple", mainModel(s, s.cal, "simple")],
     ["original", mainModel(s, s.cal, "original")],
@@ -195,7 +185,7 @@ export function accuracyRows(s: PreparedSession): ResultRow[] {
 
 /** Dwell simulation with the app's cursor and dwell settings for this pointer mode. */
 export function dwellRows(s: PreparedSession): DwellRow[] {
-  const cfg = s.pointer === "pointer" ? POINTER_DWELL : EYE_DWELL;
+  const cfg = POINTER_DWELL;
   const dots = [...s.val, ...[...s.drift.values()].flat()];
   return modelsFor(s).flatMap(([name, m]) =>
     m ? LAYOUTS.map((layout) => ({ session: s.name, pointer: s.pointer, source: name, layout: layout.name, stats: simulateDwell(dots, m.predict, { ...cfg, layout }) })) : [],

@@ -57,7 +57,7 @@ export function facePose(m: ArrayLike<number> | undefined): { yaw: number; pitch
 export const STD_FLOOR = [0, 0, 0, 0, 0.04, 0.04, 0, 0.03, 0.03, 0.03];
 
 export interface GazeFeatures {
-  /** Vector fed to the regressor. The first 4 entries are the gaze-direction terms. Length 15; eye modes use the first 10. */
+  /** Full feature vector (length 15, layout kept for recordings). Entries 0–3 and 6 are eye features the pointer ignores; pointerVector() picks the pointer inputs. */
   vector: number[];
   blinkL: number;
   blinkR: number;
@@ -77,8 +77,6 @@ export interface GazeFeatures {
 export const POINTER_INDEX = [4, 5, 7, 8, 11, 12, 10, 9, 13, 14] as const;
 export const POINTER_FEATURE_NAMES = ["yaw", "pitch", "tipX", "tipY", "tipRelX", "tipRelY", "roll", "faceH", "eyeMidX", "eyeMidY"];
 export const pointerVector = (v: number[]) => POINTER_INDEX.map((i) => v[i]);
-/** Eye-mode inputs: the first 7 entries. */
-export const eyeVector = (v: number[]) => v.slice(0, 7);
 
 export function extractFeatures(
   lm: Pt[],

@@ -1,9 +1,9 @@
-// Turns tracker frames (or the mouse, for development) into a smoothed on-screen
-// gaze point. Owns calibration data and implicit recalibration.
+// Turns tracker frames (or the mouse, for development) into a smoothed on-screen pointer
+// position. Owns calibration data and implicit recalibration. Pointer tracking only: the
+// eye-tracker mode was removed (see the parked improve-eyetracking-confidence branch).
 import { GazeRegressor, type Sample } from "./regression";
 import { PointFilter } from "./oneEuro";
 import type { FaceFrame } from "./tracker";
-import { checkPosition, type PositionCheck, type FacePos } from "./fixation";
 
 export interface GazePoint {
   t: number;
@@ -58,30 +58,16 @@ export class GazeEngine {
   source: "camera" | "mouse" = "mouse";
   /** Where calibration is saved; set per profile so each person keeps their own. */
   storageKey = KEY_CAL;
-  /** Pointer-tracker calibrations use different features, so they are stored separately. */
+  /** Pointer calibrations are stored under their own key (per profile). */
   private get calKey() {
-    if (!this.pointerMode) return this.storageKey;
     return this.storageKey === KEY_CAL ? KEY_CAL_POINTER : `${this.storageKey}.pointer`;
   }
-  private regressor = new GazeRegressor(1.0, 4);
-  private filter = new PointFilter(0.8, 0.015);
-  private pointerMode = false;
-
-  /** True once configurePointer() has been called (pointer-tracker mode). */
-  get isPointer() {
-    return this.pointerMode;
-  }
-  // Pointer tracker only: ignore wobble smaller than this many px, and trail the true point by that much when moving.
+  // The pointer: simple yaw+pitch model, no blink freeze, light smoothing, cursor kept on screen.
+  private regressor = new GazeRegressor(SIMPLE_POINTER.lambda, SIMPLE_POINTER.quadCount, SIMPLE_POINTER_FLOOR);
+  private filter = new PointFilter(POINTER_FILTER.minCutoff, POINTER_FILTER.beta);
+  // Ignore wobble smaller than this many px, and trail the true point by that much when moving.
   private anchor: { x: number; y: number } | null = null;
   private stillRadiusPx = POINTER_STILL_RADIUS_PX;
-
-  /** Pointer tracker: 10 pointer features, no blink freeze, light smoothing, cursor kept on screen. Call before calibrating. */
-  configurePointer() {
-    this.pointerMode = true;
-    this.regressor = new GazeRegressor(SIMPLE_POINTER.lambda, SIMPLE_POINTER.quadCount, SIMPLE_POINTER_FLOOR);
-    this.filter = new PointFilter(POINTER_FILTER.minCutoff, POINTER_FILTER.beta);
-    this.anchor = null;
-  }
 
   private clamp(p: { x: number; y: number }) {
     return { x: Math.min(Math.max(p.x, 0), innerWidth - 1), y: Math.min(Math.max(p.y, 0), innerHeight - 1) };
@@ -110,9 +96,6 @@ export class GazeEngine {
   irisDiameter = NaN;
   faceVisible = false;
   inferMs = 0;
-  /** Seating position (face x/y, face height) during calibration, and a smoothed current one. */
-  private posRef: FacePos | null = null;
-  private posNow: FacePos | null = null;
   /** Drift correction from the last quick re-center, added to every estimate (px). */
   private offset = { x: 0, y: 0 };
 
@@ -123,13 +106,9 @@ export class GazeEngine {
     });
   }
 
-  private get simple() {
-    return this.pointerMode;
-  }
-
-  /** The fitted model's raw prediction (the simple pointer model sees yaw and pitch only). */
+  /** The fitted model's raw prediction (the pointer model sees yaw and pitch only). */
   private model(features: number[]) {
-    return this.regressor.predict(this.simple ? simplePointerInput(features) : features);
+    return this.regressor.predict(simplePointerInput(features));
   }
 
   get calibrated() {
@@ -165,36 +144,26 @@ export class GazeEngine {
     }
     this.inferMs = this.inferMs * 0.9 + f.inferMs * 0.1;
     this.irisDiameter = Number.isFinite(this.irisDiameter) ? this.irisDiameter * 0.95 + f.irisDiameter * 0.05 : f.irisDiameter;
-    const hp = f.facePos as FacePos;
-    this.posNow = this.posNow ? (this.posNow.map((v, i) => v * 0.85 + hp[i] * 0.15) as FacePos) : [...hp];
     this.recent.push(f);
     this.dbg.frame = f;
     while (this.recent.length && f.t - this.recent[0].t > 1500) this.recent.shift();
-    // The pointer tracker doesn't use the eyes, so a blink must not freeze it.
-    const closed = !this.pointerMode && f.blinkL > 0.45 && f.blinkR > 0.45;
-    if (closed || !this.calibrated) {
-      // Freeze the cursor while the eyes are closed: iris landmarks are garbage then.
-      this.emit({ ...this.last, t: f.t, valid: this.calibrated && this.last.valid, blinkL: f.blinkL, blinkR: f.blinkR, source: "camera" });
+    // The pointer doesn't use the eyes, so a blink doesn't freeze it.
+    if (!this.calibrated) {
+      this.emit({ ...this.last, t: f.t, valid: false, blinkL: f.blinkL, blinkR: f.blinkR, source: "camera" });
       return;
     }
     const p = this.model(f.vector);
     this.dbg.raw = p;
     // Drift correction from the last quick re-center.
     const q = { x: p.x + this.offset.x, y: p.y + this.offset.y };
-    if (this.pointerMode) {
-      // Pointing far off the screen: hold the last point and mark it invalid so nothing is selected.
-      const OFF = POINTER_OFFSCREEN_PX;
-      if (q.x < -OFF || q.x > innerWidth + OFF || q.y < -OFF || q.y > innerHeight + OFF) {
-        this.emit({ ...this.last, t: f.t, valid: false, blinkL: f.blinkL, blinkR: f.blinkR, source: "camera", offscreen: true });
-        return;
-      }
-      const n = this.leash(this.clamp(this.filter.filter(q, f.t)));
-      this.emit({ t: f.t, x: n.x, y: n.y, valid: true, blinkL: f.blinkL, blinkR: f.blinkR, source: "camera" });
+    // Pointing far off the screen: hold the last point and mark it invalid so nothing is selected.
+    const OFF = POINTER_OFFSCREEN_PX;
+    if (q.x < -OFF || q.x > innerWidth + OFF || q.y < -OFF || q.y > innerHeight + OFF) {
+      this.emit({ ...this.last, t: f.t, valid: false, blinkL: f.blinkL, blinkR: f.blinkR, source: "camera", offscreen: true });
       return;
     }
-    const s = this.filter.filter(q, f.t);
-    const c = clampToView(s.x, s.y, innerWidth, innerHeight);
-    this.emit({ t: f.t, x: c.x, y: c.y, valid: true, blinkL: f.blinkL, blinkR: f.blinkR, source: "camera", offscreen: c.offscreen });
+    const n = this.leash(this.clamp(this.filter.filter(q, f.t)));
+    this.emit({ t: f.t, x: n.x, y: n.y, valid: true, blinkL: f.blinkL, blinkR: f.blinkR, source: "camera" });
   };
 
   /** Mean feature vector over open-eye frames in [t0, t1]. */
@@ -241,25 +210,16 @@ export class GazeEngine {
     return { ...this.offset };
   }
 
-  setCalibration(samples: Sample[], posRef?: FacePos | null) {
+  setCalibration(samples: Sample[]) {
     this.calSamples = samples;
     this.implicit = [];
     this.offset = { x: 0, y: 0 };
-    if (posRef !== undefined) this.posRef = posRef;
     this.refit();
     try {
       localStorage.setItem(this.calKey, JSON.stringify(samples));
-      if (this.posRef) localStorage.setItem(`${this.calKey}.pos`, JSON.stringify(this.posRef));
     } catch {
       /* storage full / disabled */
     }
-  }
-
-  /** Is the user still roughly where they were during calibration? null if unknown (no face / no reference). */
-  positionCheck(): PositionCheck | null {
-    // The pointer tracker expects movement, so "moved since calibration" means nothing there.
-    if (this.pointerMode || !this.posRef || !this.posNow || !this.faceVisible || this.source !== "camera") return null;
-    return checkPosition(this.posRef, this.posNow);
   }
 
   get calibrationSamples() {
@@ -272,8 +232,7 @@ export class GazeEngine {
       if (!raw) return false;
       const samples: Sample[] = JSON.parse(raw);
       if (samples[0]?.features.length !== this.recent.at(-1)?.vector.length) return false;
-      const pos = localStorage.getItem(`${this.calKey}.pos`);
-      this.setCalibration(samples, pos ? (JSON.parse(pos) as FacePos) : null);
+      this.setCalibration(samples);
       return true;
     } catch {
       return false;
@@ -298,7 +257,7 @@ export class GazeEngine {
 
   private refit() {
     const all = [...this.calSamples, ...this.implicit];
-    if (all.length >= 8) this.regressor.fit(this.simple ? all.map((s) => ({ ...s, features: simplePointerInput(s.features) })) : all);
+    if (all.length >= 8) this.regressor.fit(all.map((s) => ({ ...s, features: simplePointerInput(s.features) })));
     this.filter.reset();
     this.anchor = null;
   }

@@ -4,7 +4,6 @@ import type { GazeEngine } from "../gaze/engine";
 import type { Sample } from "../gaze/regression";
 import { summarizeErrors, type ErrorStats, type ViewingGeometry } from "../gaze/accuracy";
 import type { FaceFrame } from "../gaze/tracker";
-import type { FacePos } from "../gaze/fixation";
 import { evaluate } from "../eval/metrics";
 import type { SessionTape } from "../record/tape";
 
@@ -93,7 +92,7 @@ export async function runCalibration(
   engine: GazeEngine,
   root: HTMLElement,
   geometry: () => ViewingGeometry,
-  message = "Look at each dot until it disappears. Sit still and comfortable.",
+  message = "Look at each dot until it disappears.",
   /** Optional: record raw frames against the dots so this calibration can be replayed offline. */
   tape?: SessionTape,
 ): Promise<CalResult | null> {
@@ -104,7 +103,7 @@ export async function runCalibration(
   const bar = root.querySelector<HTMLElement>(".cal-bar i")!;
   const progText = root.querySelector<HTMLElement>(".cal-progress span")!;
   const totalDots = CAL_POINTS.length + VAL_POINTS.length;
-  const checkCollectMs = engine.isPointer ? POINTER_CHECK_COLLECT_MS : COLLECT_MS;
+  const checkCollectMs = POINTER_CHECK_COLLECT_MS;
   const checkDotMs = SETTLE_MS + checkCollectMs;
   const remainingMs = (done: number) =>
     Math.max(0, CAL_POINTS.length - done) * DOT_MS + Math.min(VAL_POINTS.length, totalDots - Math.max(done, CAL_POINTS.length)) * checkDotMs;
@@ -165,12 +164,7 @@ export async function runCalibration(
       await sleep(2500);
       return null;
     }
-    // Where the user sat while calibrating, so the app can warn if it moves away later (eye mode only).
-    const posRefOf = () => {
-      const kept = pts.flatMap((c) => trimOutliers(c.frames));
-      return [0, 1, 2].map((j) => kept.reduce((a, f) => a + f.facePos[j], 0) / kept.length) as FacePos;
-    };
-    engine.setCalibration(samples, posRefOf());
+    engine.setCalibration(samples);
 
     // Quality pass: re-collect the dots the fit disagrees with most (moved suddenly, glanced away, tracker glitch).
     const resid = pts.map((c, i) => ({
@@ -192,7 +186,7 @@ export async function runCalibration(
     }
     if (bad.length) {
       samples = build();
-      engine.setCalibration(samples, posRefOf());
+      engine.setCalibration(samples);
     }
 
     msg.textContent = "Checking accuracy…";
