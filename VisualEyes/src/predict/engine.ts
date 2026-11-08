@@ -15,6 +15,8 @@
 //
 // Pure TypeScript; persistence is injected so it runs in tests and in the browser.
 
+import { containsSlur, isSlur } from "../safety/slurs";
+
 export const LETTER_GROUPS = ["abc", "def", "ghi", "jkl", "mno", "pqrs", "tuv", "wxyz"] as const;
 
 /** One typed slot: the set of letters it may stand for (a group, or one exact letter). */
@@ -117,9 +119,11 @@ const SEED_PHRASE_COUNT = 0.25;
 const SEED_NGRAM_WEIGHT = 0.25;
 /** Phrase chips show at most this many words; choosing one brings the next part up as the next chip. */
 const MAX_PHRASE_CHIP_WORDS = 6;
+/** A phrase this short is shown whole rather than cut at MAX_PHRASE_CHIP_WORDS. */
+const WHOLE_PHRASE_WORDS = 8;
 /** Words too common to anchor a mid-sentence phrase match on their own. */
 const STOPWORDS = new Set(
-  "a an the and or but to of in on at for with from by is are was were be been am i you he she it we they me my your his her its our their this that these those so if then than as do does did not no yes can could would should will just up out about into over after before again very too".split(" "),
+  "a an the and or but to of in on at for with from by is are was were be been am i you he she it we they me my your his her its our their this that these those so if then than as do does did not no yes can could would should will just up out about into over after before again very too u ur im ya yo pls plz".split(" "),
 );
 
 export class PredictionEngine {
@@ -186,6 +190,7 @@ export class PredictionEngine {
     this.penalty = new Map();
     this.topics = new Set();
     this.restore();
+    this.dropSlurs();
     if (!this.phrases.length) this.phrases = this.seedPhrases.map((text) => ({ text, count: SEED_PHRASE_COUNT, last: 0 }));
     this.personalTotal = [...this.personalWords.values()].reduce((a, s) => a + s.c, 0);
     this.rebuildIndex();
@@ -249,7 +254,21 @@ export class PredictionEngine {
     for (const w of this.topics) this.indexWord(w);
   }
 
+  /** Remove slurs from data saved before slur blocking existed (or imported from elsewhere). */
+  private dropSlurs() {
+    this.phrases = this.phrases.filter((p) => !containsSlur(p.text));
+    for (const w of [...this.personalWords.keys()]) if (isSlur(w)) this.personalWords.delete(w);
+    for (const c of [this.bigrams, this.trigrams])
+      for (const [ctx, row] of c) {
+        if (ctx.split(" ").some(isSlur)) c.delete(ctx);
+        else for (const w of [...row.keys()]) if (isSlur(w)) row.delete(w);
+      }
+    for (const w of [...this.pinned.keys()]) if (isSlur(w)) this.pinned.delete(w);
+    for (const w of [...this.topics]) if (isSlur(w)) this.topics.delete(w);
+  }
+
   private indexWord(w: string) {
+    if (isSlur(w)) return; // never typeable through suggestions, never offered
     if (this.vocab.has(w)) return;
     this.vocab.add(w);
     const seq = keySeq(w);
@@ -370,7 +389,7 @@ export class PredictionEngine {
   /** Learn from a sentence the user committed (spoke / inserted). */
   learn(sentence: string): void {
     const words = tokenize(sentence);
-    if (!words.length) return;
+    if (!words.length || containsSlur(sentence)) return; // slurs are never learned
     this.learnWords(words, 1);
     // Saying it deliberately cancels earlier rejections in these contexts.
     const seq = ["<s>", ...words];
@@ -395,6 +414,7 @@ export class PredictionEngine {
     const known = new Set(this.phrases.map((p) => tokenize(p.text).join(" ")));
     let imported = this.phrases.filter((p) => p.count < 1 && p.count !== SEED_PHRASE_COUNT).length;
     for (const s of sentences) {
+      if (containsSlur(s)) continue; // imported text: sentences with slurs are skipped entirely
       const words = tokenize(s);
       this.learnWords(words, weight);
       const norm = words.join(" ");
@@ -418,7 +438,7 @@ export class PredictionEngine {
     for (const raw of words) {
       for (const part of raw.trim().split(/\s+/)) {
         const w = part.toLowerCase().replace(/[^a-z']/g, "");
-        if (!w) continue;
+        if (!w || isSlur(w)) continue;
         this.pinned.set(w, part.replace(/[^A-Za-z']/g, ""));
         this.indexWord(w);
       }
@@ -431,7 +451,7 @@ export class PredictionEngine {
    * boost, so "hockey" or "garden" come up easily without crowding out everyday words.
    */
   setTopics(text: string): void {
-    this.topics = new Set(tokenize(text).filter((w) => w.length >= 3 && !STOPWORDS.has(w)));
+    this.topics = new Set(tokenize(text).filter((w) => w.length >= 3 && !STOPWORDS.has(w) && !isSlur(w)));
     for (const w of this.topics) this.indexWord(w);
     this.persist();
   }
@@ -454,6 +474,19 @@ export class PredictionEngine {
   private phraseScore(p: PhraseEntry): number {
     const ageH = p.last ? (this.now() - p.last) / 3.6e6 : 1e4;
     return p.count + 2 / (1 + ageH);
+  }
+
+  /**
+   * What the user actually said most recently (spoken, inserted or copied), newest first.
+   * Starter phrases and imported writing samples are left out: they aren't things the user
+   * just said, and the samples already reach the AI as part of the profile.
+   */
+  recentSentences(n: number): string[] {
+    return this.phrases
+      .filter((p) => p.last > 0)
+      .sort((a, b) => b.last - a.last)
+      .slice(0, n)
+      .map((p) => p.text);
   }
 
   topPhrases(n: number): string[] {
@@ -495,7 +528,7 @@ export class PredictionEngine {
     ]);
     const recent = new Set(committed.slice(-3));
     const score = (w: string) => ({ kind: "word" as const, label: this.display(w), text: w, score: this.wordScore(w, prev2, prev) });
-    const inContext = [...cands].filter((w) => !recent.has(w)).map(score).sort((a, b) => b.score - a.score).slice(0, n);
+    const inContext = [...cands].filter((w) => !recent.has(w) && !isSlur(w)).map(score).sort((a, b) => b.score - a.score).slice(0, n);
     if (inContext.length >= n) return inContext;
     const have = new Set(inContext.map((s) => s.text));
     const fill = [
@@ -521,7 +554,12 @@ export class PredictionEngine {
       const m = this.alignPhrase(committed, words);
       if (!m || m.at >= words.length) continue;
       if (slots.length && !matchesSlots(words[m.at], slots)) continue;
-      const restWords = words.slice(m.at, m.at + MAX_PHRASE_CHIP_WORDS);
+      let restWords = words.slice(m.at);
+      if (restWords.length > WHOLE_PHRASE_WORDS) {
+        // Cut long phrases, but never so the chip ends on a dangling "to" / "the" / "and".
+        restWords = restWords.slice(0, MAX_PHRASE_CHIP_WORDS);
+        while (restWords.length > 2 && STOPWORDS.has(restWords[restWords.length - 1])) restWords.pop();
+      }
       // Phrases continuing the whole sentence beat ones matched on its last few words.
       const weight = m.fromStart ? 2 : 0.4 + 0.3 * Math.min(m.overlap, 3);
       // Keep the phrase's own capitals for names ("Priya"), but not a capital that only marked its sentence start.
@@ -540,14 +578,16 @@ export class PredictionEngine {
 
   /**
    * Where a stored phrase continues what has been typed: either the sentence so far is the
-   * start of the phrase, or the last 1–4 typed words appear inside it (so "...can you tell"
-   * still finds "Tell Priya I love her"). A single common word ("the") is too weak an anchor.
+   * start of the phrase, or the last typed words appear inside it (so "...can you tell Priya"
+   * still finds "Tell Priya I love her"). A mid-sentence match needs at least two meaningful
+   * words in common, or three words of any kind: one shared word ("...turn the game" vs
+   * "watch the game together tonight") glues on endings that make no sense.
    */
   private alignPhrase(committed: string[], words: string[]): { at: number; overlap: number; fromStart: boolean } | null {
     if (committed.every((w, i) => words[i] === w)) return { at: committed.length, overlap: committed.length, fromStart: true };
     for (let k = Math.min(4, committed.length); k >= 1; k--) {
       const tail = committed.slice(-k);
-      if (k === 1 && STOPWORDS.has(tail[0])) return null;
+      if (k < 3 && tail.filter((w) => !STOPWORDS.has(w)).length < 2) continue;
       for (let j = k; j < words.length; j++) {
         let ok = true;
         for (let i = 0; i < k && ok; i++) ok = words[j - k + i] === tail[i];
