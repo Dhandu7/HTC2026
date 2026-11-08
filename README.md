@@ -4,7 +4,7 @@
 
 # VisualEyes
 
-> **Speak with your eyes and stay part of the conversation.**
+> **Speak with your head and stay part of the conversation.**
 
 **Hack the Change 2026** · Team **P76W26**
 
@@ -37,12 +37,12 @@ Dedicated eye-tracking communication devices cost thousands of dollars and still
 
 ```mermaid
 flowchart LR
-    cam["📷 Webcam"] --> mp["MediaPipe<br/>Face Landmarker"]
-    mp --> head["🧭 Head pointer"]
-    head --> kb["⌨️ Keyboard<br/>dwell to select"]
-    kb --> voice["🗣️ ElevenLabs<br/>your own voice"]
-    voice --> out["🔊 Spoken aloud"]
-    llm["🤖 Claude<br/>reply suggestions"] <-.-> kb
+    cam["Webcam"] --> mp["MediaPipe<br/>Face Landmarker"]
+    mp --> head["Head pointer"]
+    head --> kb["Keyboard<br/>dwell to select"]
+    kb --> voice["ElevenLabs<br/>your own voice"]
+    voice --> out["Spoken aloud"]
+    llm["Claude<br/>reply suggestions"] <-.-> kb
 
     classDef local fill:#EEF5F6,stroke:#0B4F5C,color:#0B4F5C,stroke-width:2px
     classDef remote fill:#FFF1EC,stroke:#E4572E,color:#7A2A12,stroke-width:2px
