@@ -1,16 +1,16 @@
 # HTC2026
 
-# VisualEyes
+# VocalEyes
 
 > **Speak with your eyes stay part of the conversation**
 
-VisualEyes is a webcam-only, conversation-first communicator for people who can't speak or use their hands, such as people living with ALS, cerebral palsy or locked-in syndrome. It runs on any laptop with a webcam. The user looks at a suggested reply, and GazeType speaks it aloud. Typing is the mechanism. The conversation is the product.
+VocalEyes is a webcam-only, conversation-first communicator for people who can't speak or use their hands, such as people living with ALS, cerebral palsy or locked-in syndrome. It runs on any laptop with a webcam. The user looks at a suggested reply, and VocalEyes speaks it aloud. Typing is the mechanism. The conversation is the product.
 
 ## The problem
 
 Dedicated eye-tracking communication devices cost thousands of dollars and still make people type one letter at a time. A conversation at that speed loses its jokes, its timing and its warmth. People drift away from friends and family, and isolation is itself a health risk.
 
-## What VisualEyes does
+## What VocalEyes does
 
 - **Webcam-only gaze control.** MediaPipe face and iris landmarks, with a 9-point calibration. Gaze tracking runs on-device, so no video leaves the laptop.
 - **Built for imperfect tracking.** Large targets, dwell selection (~700 ms) and a prediction-first layout, so a few degrees of error doesn't break the experience.
@@ -63,13 +63,13 @@ npm run dev
 
 Open the app in Chrome, allow webcam access, and complete the 9-point calibration. Sit about 50–70 cm from the screen in even lighting for the best results.
 
-**Fallbacks:** if gaze tracking is unreliable in your lighting, switch to head-pose mode or the keyboard mode in settings. The conversation engine works the same way in both.
+**Fallbacks:** if gaze tracking is unreliable in your lighting, switch to pointer mode or the keyboard mode in settings. The conversation engine works the same way in both.
 
 ## Privacy and safety
 
 - Video is processed in the browser and never uploaded.
 - Only the text of selected messages and the user's learned phrases are stored.
-- VisualEyes is a communication aid, not a medical device.
+- VocalEyes is a communication aid, not a medical device.
 
 ## Roadmap
 

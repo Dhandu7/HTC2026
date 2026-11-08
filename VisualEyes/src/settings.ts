@@ -2,8 +2,6 @@
 import type { SelectionMode } from "./input/selection";
 
 export interface Settings {
-  /** What the camera follows: the head (nose pointer, the default) or the eyes. */
-  tracker: "head" | "eye";
   selectionMode: SelectionMode;
   /** Hold-to-select time for every gaze target. */
   dwellMs: number;
@@ -34,10 +32,12 @@ export interface Settings {
   volume: number;
   /** Technical status line under the keyboard (fps, error, latency). */
   showStats: boolean;
+  /** Download every calibration as a replayable file (raw landmarks; npm run replay). */
+  saveCalibrations: boolean;
+  participant: string;
 }
 
 export const DEFAULTS: Settings = {
-  tracker: "head",
   selectionMode: "dwell",
   dwellMs: 1500,
   baselineDwellMs: 1500,
@@ -61,6 +61,8 @@ export const DEFAULTS: Settings = {
   speechRate: 1,
   volume: 80,
   showStats: false,
+  saveCalibrations: true,
+  participant: "",
 };
 
 export interface Theme {

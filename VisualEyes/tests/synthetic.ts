@@ -4,11 +4,11 @@ import { SESSION_FORMAT, buildProtocol, f32ToB64, type ProtocolMode, type Record
 
 // ---------- synthetic sessions: landmarks driven by a known gaze mapping ----------
 
-function fakeLandmarks(gx: number, gy: number, headX: number): Float32Array {
+function fakeLandmarks(gx: number, gy: number, offX: number, offY = 0): Float32Array {
   const lm = new Float32Array(478 * 3).fill(0.5);
   const set = (i: number, x: number, y: number) => {
-    lm[i * 3] = x + headX;
-    lm[i * 3 + 1] = y;
+    lm[i * 3] = x + offX;
+    lm[i * 3 + 1] = y + offY;
     lm[i * 3 + 2] = 0;
   };
   // gx, gy in [-1, 1]: iris moves within each eye.
@@ -37,27 +37,47 @@ function fakeLandmarks(gx: number, gy: number, headX: number): Float32Array {
 
 const BLEND = ["eyeBlinkLeft", "eyeBlinkRight", "eyeLookUpLeft", "eyeLookUpRight", "eyeLookDownLeft", "eyeLookDownRight"];
 
-export function fakeSession(participant: string, mode: ProtocolMode, person: { gain: number; bias: number }, seed = 1): RecordedSession {
+/**
+ * pointer "eye": the eyes rotate toward each dot, face still. pointer "pointer": the whole face
+ * shifts toward each dot, eyes centred; check dots last 3.6 s so the 2 s dwell fits.
+ */
+/** Column-major 4x4 matrix whose facePose() reads back as this yaw/pitch (radians), roll 0. */
+function rotation(yaw: number, pitch: number): number[] {
+  const m = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  m[2] = -Math.sin(yaw);
+  m[6] = Math.sin(pitch);
+  m[10] = Math.cos(pitch);
+  return m;
+}
+
+export function fakeSession(participant: string, mode: ProtocolMode, person: { gain: number; bias: number }, seed = 1, pointer: "eye" | "pointer" = "pointer"): RecordedSession {
   let s = seed;
   const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
   const protocol = buildProtocol(mode, rnd);
   const vw = 1500;
   const vh = 900;
   const frames: RecordedFrame[] = [];
+  let t0 = 0;
   const targets = protocol.map((p, ti) => {
-    for (let k = 0; k < 20; k++) {
+    const nFrames = pointer === "pointer" && p.segment !== "cal" ? 110 : 20;
+    const tShown = t0;
+    t0 += nFrames * 33 + 200;
+    for (let k = 0; k < nFrames; k++) {
       // Person-specific mapping from target to eye rotation, plus a little noise.
       const gx = (p.fx - 0.5) * 2 * person.gain + person.bias + (rnd() - 0.5) * 0.02;
       const gy = (0.5 - p.fy) * 2 * person.gain + (rnd() - 0.5) * 0.02;
       const bs = Float32Array.from([0.05, 0.05, Math.max(0, gy) * 0.5, Math.max(0, gy) * 0.5, Math.max(0, -gy) * 0.5, Math.max(0, -gy) * 0.5]);
-      frames.push({ t: ti * 1000 + k * 33, ti, c: k >= 4, lm: f32ToB64(fakeLandmarks(gx, gy, 0)), bs: f32ToB64(bs), m: null, inferMs: 5 });
+      const lm = pointer === "pointer" ? fakeLandmarks(0, 0, gx * 0.05, -gy * 0.05) : fakeLandmarks(gx, gy, 0);
+      // Pointer mode also turns the face: yaw/pitch encoded in the transformation matrix (see facePose()).
+      const m = pointer === "pointer" ? rotation(gx * 0.3, gy * 0.2) : null;
+      frames.push({ t: tShown + k * 33, ti, c: k >= 4, lm: f32ToB64(lm), bs: f32ToB64(bs), m, inferMs: 5 });
     }
-    return { ...p, x: p.fx * vw, y: p.fy * vh, vw, vh, tShown: ti * 1000, tCollect0: ti * 1000 + 132, tCollect1: ti * 1000 + 660 };
+    return { ...p, x: p.fx * vw, y: p.fy * vh, vw, vh, tShown, tCollect0: tShown + 132, tCollect1: tShown + (nFrames - 1) * 33 };
   });
   return {
     format: SESSION_FORMAT,
     createdAt: "2026-11-07T00:00:00Z",
-    meta: { participant, glasses: false, lighting: "synthetic", notes: "", mode, distanceCm: 60, screenDiagonalIn: 14, hfovDeg: 60 },
+    meta: { participant, pointer, glasses: false, lighting: "synthetic", notes: "", mode, distanceCm: 60, screenDiagonalIn: 14, hfovDeg: 60 },
     env: { userAgent: "test", camera: "fake", videoWidth: 1280, videoHeight: 720, screenWidth: 1512, screenHeight: 982, devicePixelRatio: 2 },
     blendNames: BLEND,
     targets,

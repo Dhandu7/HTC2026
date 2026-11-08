@@ -19,10 +19,10 @@ export interface KeyboardHost {
   activeProfileId(): string;
   /** A short message for the user (e.g. why a word was blocked). */
   notice(message: string): void;
-  /** AI sentence suggestions are switched on (Settings). Word prediction is always on. */
-  aiEnabled(): boolean;
+  /** AI sentence suggestions are switched on (Settings). Word prediction is always on. Default on. */
+  aiEnabled?(): boolean;
   /** A benchmark run is in progress (shows "Finish run" in the menu). */
-  benchmarking(): boolean;
+  benchmarking?(): boolean;
 }
 
 export interface Keyboard {
@@ -48,7 +48,14 @@ const key = (id: string, label: string, kind = "", sub = "", o: { on?: boolean; 
   g(id, `<span class="kl">${esc(label)}</span>${sub ? `<small>${esc(sub)}</small>` : ""}`, { face: `k ${kind}`.trim(), on: o.on, read: o.read });
 const blank = () => `<div class="g blank"><div class="face k empty"></div></div>`;
 
-type Panel = "main" | "phrases" | "menu" | "profiles" | "numbers" | { letters: string };
+type Panel = "home" | "main" | "phrases" | "menu" | "profiles" | "numbers" | { letters: string };
+
+/**
+ * Home screen: 6 large targets (3x2) = this many ready-to-speak phrases + "Keyboard".
+ * Recorded pointer sessions hit 6 large buttons far more often than the 16-key grid
+ * (mean 59% vs 32% of frames), so the grid is the fallback, one selection away.
+ */
+export const HOME_CHIPS = 5;
 
 /** Longer chip text gets a smaller font so it fits the target instead of being cut off. */
 const chipSize = (label: string) => (label.length > 34 ? " xlong" : label.length > 16 ? " long" : "");
@@ -65,7 +72,19 @@ export class GazeTypeKeyboard implements Keyboard {
   committed: string[] = [];
   slots: Slot[] = [];
   spellMode = false;
-  private panel: Panel = "main";
+  /** Start on (and return to) the 6-chip home screen. Off during typing benchmarks. */
+  useHome = true;
+  private panel: Panel = "home";
+  /**
+   * Phrases on the home screen. A provider so the conversation engine can supply replies to
+   * what the partner said; defaults to the user's most-used phrases.
+   */
+  homeSource: (n: number) => string[] = (n) => this.engine.topPhrases(n);
+  private homeItems: string[] = [];
+
+  get onHome() {
+    return this.panel === "home";
+  }
   private chips: Suggestion[] = [];
   private llmChips: Suggestion[] = [];
   private panelItems: Suggestion[] = [];
@@ -87,7 +106,7 @@ export class GazeTypeKeyboard implements Keyboard {
   clear() {
     this.committed = [];
     this.slots = [];
-    this.panel = "main";
+    this.panel = this.useHome ? "home" : "main";
     this.undoStack = [];
     this.update();
   }
@@ -102,7 +121,8 @@ export class GazeTypeKeyboard implements Keyboard {
     this.snapshot();
     this.committed = [];
     this.slots = [];
-    this.panel = "main";
+    // Clearing (and speaking) goes back to the start: the home screen, or the grid in benchmarks.
+    this.panel = this.useHome ? "home" : "main";
     this.update();
   }
 
@@ -161,7 +181,7 @@ export class GazeTypeKeyboard implements Keyboard {
     const seq = ++this.llmSeq;
     this.cancelLlm();
     // Ask the LLM for sentence continuations once there is some context and no word in progress.
-    if (!this.slots.length && words.length >= 1 && this.host.aiEnabled()) {
+    if (!this.slots.length && words.length >= 1 && this.host.aiEnabled?.() !== false) {
       const text = this.text();
       this.llmTimer = setTimeout(() => {
         const ctrl = (this.llmAbort = new AbortController());
@@ -198,18 +218,33 @@ export class GazeTypeKeyboard implements Keyboard {
   render(root: HTMLElement) {
     root.className = "tray";
     const p = this.panel;
-    if (p === "main") {
+    if (p === "home") {
+      this.homeItems = this.homeSource(HOME_CHIPS);
+      const items = this.homeItems.slice(0, HOME_CHIPS);
+      root.innerHTML =
+        items.map((t, i) => key(`home:${i}`, t, "phr", "speak", { read: true })).join("") +
+        Array.from({ length: HOME_CHIPS - items.length }, blank).join("") +
+        key("keyboard", "Keyboard", "fn", "type something new");
+      root.className = "tray home";
+    } else if (p === "main") {
       const chips = this.visibleChips()
         .map((c, i) =>
           c ? key(`chip:${i}`, c.label, `chip${c.kind === "llm" ? " ai" : ""}${chipSize(c.label)}`, c.kind === "llm" ? "AI" : c.kind === "phrase" ? "phrase" : "", { read: c.kind !== "word" }) : blank(),
         )
         .join("");
-      const groups = LETTER_GROUPS.map((gr, i) => key(`g:${i}`, gr.toUpperCase(), "grp")).join("");
+      const group = (i: number) => key(`g:${i}`, LETTER_GROUPS[i].toUpperCase(), "grp");
       const n = this.slots.length;
+      // Delete sits one step in from the edge (row 3, column 2): the pointer struggles to reach the
+      // corners, bottom-left worst of all, and delete is used constantly. The least-used
+      // letter group (WXYZ) takes the bottom-left corner instead. Letters keep reading order.
       root.innerHTML =
         chips +
-        groups +
+        [0, 1, 2, 3].map(group).join("") +
+        group(4) +
         key("del", "Delete", "fn", n ? "letter" : "word") +
+        group(5) +
+        group(6) +
+        group(7) +
         key("space", "Space", "fn", n ? "accept" : "") +
         key("phrases", n >= 2 ? "Expand" : "Phrases", "fn", n >= 2 ? "initials to sentence" : "") +
         key("menu", "Done", "fn", "speak and more");
@@ -227,7 +262,7 @@ export class GazeTypeKeyboard implements Keyboard {
       root.innerHTML =
         key("act:speak", "Speak", "fn") +
         (ov ? key("act:insert", "Insert", "fn", "into app") : key("act:copy", "Copy", "fn")) +
-        key("act:clear", "Clear", "fn") +
+        key("act:clear", this.useHome ? "Home" : "Clear", "fn", this.useHome ? "clears text" : "") +
         key("act:spell", `Spell: ${this.spellMode ? "On" : "Off"}`, "fn", "exact letters", { on: this.spellMode }) +
         key("act:voice", "My voice", "fn") +
         key("act:phrases", "Saved phrases", "fn") +
@@ -239,7 +274,7 @@ export class GazeTypeKeyboard implements Keyboard {
         key("act:recenter", "Re-centre", "fn", "or blink 3 times") +
         key("act:profiles", "Switch user", "fn", me?.name ?? "") +
         key("act:rest", "Rest", "fn", "pause eye tracking") +
-        (this.host.benchmarking() ? key("act:benchmark-done", "Finish run", "fn") : ov ? key("act:hide", "Hide", "fn") : blank()) +
+        (this.host.benchmarking?.() ? key("act:benchmark-done", "Finish run", "fn") : ov ? key("act:hide", "Hide", "fn") : blank()) +
         key("back", "Back", "fn");
     } else if (p === "numbers") {
       root.innerHTML =
@@ -321,6 +356,18 @@ export class GazeTypeKeyboard implements Keyboard {
     let ev: EventKind = "other";
     if (["g", "l", "chip", "space", "del", "pi"].includes(kind) && !(kind === "g" && this.spellMode)) this.snapshot();
     switch (kind) {
+      case "home": {
+        // One selection = one message: speak the phrase straight away (speaking clears and returns home).
+        const t = this.homeItems[Number(arg)];
+        if (!t) return "other";
+        this.commitSentence(t);
+        this.host.action("speak");
+        return "phrase";
+      }
+      case "keyboard":
+        this.panel = "main";
+        this.update();
+        return "other";
       case "g": {
         const g = LETTER_GROUPS[Number(arg)];
         if (this.spellMode) {
@@ -499,7 +546,7 @@ export class BaselineKeyboard implements Keyboard {
     root.innerHTML =
       chips +
       QWERTY.map((r) => `<div class="krow">${[...r].map((c) => key(`k:${c}`, c.toUpperCase())).join("")}</div>`).join("") +
-      `<div class="krow">${key("del", "Delete", "fn")}${g("space", `<span class="kl">Space</span>`, { cls: "wide", face: "k fn" })}${key("act:speak", "Speak", "fn")}${this.host.benchmarking() ? key("act:benchmark-done", "Finish run", "fn") : ""}${this.host.overlay ? key("act:insert", "Insert", "fn") : ""}</div>`;
+      `<div class="krow">${key("del", "Delete", "fn")}${g("space", `<span class="kl">Space</span>`, { cls: "wide", face: "k fn" })}${key("act:speak", "Speak", "fn")}${this.host.benchmarking?.() ? key("act:benchmark-done", "Finish run", "fn") : ""}${this.host.overlay ? key("act:insert", "Insert", "fn") : ""}</div>`;
   }
 
   displayHtml() {

@@ -1,4 +1,4 @@
-// Pure helpers for calibration quality and head position (no DOM, unit-tested).
+// Pure helpers for calibration quality (no DOM, unit-tested).
 
 const median = (xs: number[]) => {
   const s = [...xs].sort((a, b) => a - b);
@@ -48,33 +48,4 @@ export function scatteredDots(spreads: number[][], factor = 3): number[] {
   const dims = valid[0].length;
   const typical = Array.from({ length: dims }, (_, j) => median(valid.map((s) => s[j])));
   return spreads.flatMap((s, i) => (s.length && s.some((v, j) => v > factor * typical[j]) ? [i] : []));
-}
-
-/** Nose x, nose y (fractions of the camera frame) and face height (fraction of frame height). */
-export type HeadPos = [number, number, number];
-
-export interface HeadCheck {
-  ok: boolean;
-  /** What to do, in the user's terms (e.g. "Move back a little"). */
-  advice: string | null;
-}
-
-/**
- * Compare the head position now with where it was during calibration. Webcam gaze is
- * calibrated for one head position; moving sideways, up/down or nearer/further shifts
- * every estimate. Thresholds are a fraction of the camera frame (side/height) and a
- * ratio of apparent face size (distance).
- */
-export function checkHead(ref: HeadPos, now: HeadPos, shift = 0.07, scale = 0.12): HeadCheck {
-  const [rx, ry, rh] = ref;
-  const [x, y, h] = now;
-  const size = h / rh;
-  // The camera image isn't mirrored: the user's left is the image's right (larger x).
-  if (size > 1 + scale) return { ok: false, advice: "Move back a little" };
-  if (size < 1 - scale) return { ok: false, advice: "Move a little closer" };
-  if (x - rx > shift) return { ok: false, advice: "Move a little to your right" };
-  if (rx - x > shift) return { ok: false, advice: "Move a little to your left" };
-  if (y - ry > shift) return { ok: false, advice: "Raise your head a little" };
-  if (ry - y > shift) return { ok: false, advice: "Lower your head a little" };
-  return { ok: true, advice: null };
 }

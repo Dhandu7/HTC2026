@@ -5,7 +5,7 @@ import { extractFeatures, type GazeFeatures, type Pt } from "../gaze/features";
 export const SESSION_FORMAT = "gazetype.session.v1";
 
 /** Which part of the protocol a target belongs to. */
-export type SegmentKind = "cal" | "val" | "drift";
+export type SegmentKind = "cal" | "val" | "drift" | "target";
 
 export interface ProtocolTarget {
   segment: SegmentKind;
@@ -21,6 +21,8 @@ export interface ProtocolTarget {
 export const GRID_X = [0.08, 0.29, 0.5, 0.71, 0.92];
 export const GRID_Y = [0.1, 0.3, 0.5, 0.7, 0.9];
 export const APP_9 = new Set(["0.08,0.1", "0.5,0.1", "0.92,0.1", "0.08,0.5", "0.5,0.5", "0.92,0.5", "0.08,0.9", "0.5,0.9", "0.92,0.9"]);
+/** The app's 9 points plus the 4 inner grid points: a mid-size calibration that is still a grid subset. */
+export const APP_13 = new Set([...APP_9, "0.29,0.3", "0.71,0.3", "0.29,0.7", "0.71,0.7"]);
 export const CORNERS_5 = new Set(["0.08,0.1", "0.92,0.1", "0.5,0.5", "0.08,0.9", "0.92,0.9"]);
 // Validation points sit midway between grid lines, so none coincides with a calibration point.
 export const VAL_X = [0.185, 0.395, 0.605, 0.815];
@@ -31,7 +33,23 @@ export const DRIFT_MIN = [2, 5, 10];
 export const SETTLE_MS = 800;
 export const COLLECT_MS = 1500;
 
-export type ProtocolMode = "full" | "short";
+/** "calibration" = saved from the app's own ◎ Calibrate (cal points + 4 check points). */
+/** "target" = closed-loop Target test: pointer visible, select highlighted buttons by dwell. */
+export type ProtocolMode = "full" | "quick" | "short" | "calibration" | "target";
+
+/** One Target-test trial: a highlighted button the user steered the visible pointer onto. */
+export interface TargetTrial {
+  layout: string;
+  /** Button the user was asked to select, e.g. "3,1" (column, row), and its centre (viewport fractions). */
+  target: string;
+  fx: number;
+  fy: number;
+  outcome: "correct" | "wrong" | "timeout";
+  /** Button actually selected (null on timeout). */
+  selected: string | null;
+  /** From the button lighting up to the selection (or the timeout). */
+  timeMs: number;
+}
 
 const key = (fx: number, fy: number) => `${fx},${fy}`;
 export const pointKey = key;
@@ -46,14 +64,16 @@ function shuffled<T>(xs: T[], rnd: () => number): T[] {
 }
 
 /**
- * Targets in display order. Full: 25-point grid, 16 validation points, then the 16
- * validation points again at each drift check. Short (strangers, ~1 min): the app's
- * 9 points plus the 16 validation points.
+ * Targets in display order. Full (~12 min): 25-point grid, 16 validation points, then the
+ * 16 validation points again at each drift check. Quick (~80 s, for fast A/B trials): the
+ * 25-point grid plus 8 validation points in a checkerboard. Short (strangers, ~1 min): the
+ * app's old 9 points plus the 16 validation points.
  */
 export function buildProtocol(mode: ProtocolMode, rnd: () => number = Math.random): ProtocolTarget[] {
   const grid = GRID_Y.flatMap((fy) => GRID_X.map((fx) => ({ fx, fy })));
-  const cal = mode === "full" ? grid : grid.filter((p) => APP_9.has(key(p.fx, p.fy)));
-  const val = VAL_Y.flatMap((fy) => VAL_X.map((fx) => ({ fx, fy })));
+  const cal = mode === "short" ? grid.filter((p) => APP_9.has(key(p.fx, p.fy))) : grid;
+  const allVal = VAL_Y.flatMap((fy, r) => VAL_X.map((fx, c) => ({ fx, fy, r, c })));
+  const val = (mode === "quick" ? allVal.filter((p) => (p.r + p.c) % 2 === 0) : allVal).map(({ fx, fy }) => ({ fx, fy }));
   const out: ProtocolTarget[] = [
     ...shuffled(cal, rnd).map((p) => ({ segment: "cal" as const, atMin: 0, ...p })),
     ...shuffled(val, rnd).map((p) => ({ segment: "val" as const, atMin: 0, ...p })),
@@ -63,7 +83,19 @@ export function buildProtocol(mode: ProtocolMode, rnd: () => number = Math.rando
   return out;
 }
 
+/** Mode the session was recorded with. "eye" (or none) = the removed eye-tracker mode; kept so old files still load. */
+export type PointerMode = "eye" | "pointer";
+
+/**
+ * Collection time per dot. Pointer mode keeps check dots up longer so the 2 s dwell can be
+ * simulated (arrival + 2 s must fit inside the dot).
+ */
+export function collectMsFor(segment: SegmentKind, pointer: PointerMode | undefined): number {
+  return pointer === "pointer" && segment !== "cal" ? 2700 : COLLECT_MS;
+}
+
 export interface SessionMeta {
+  pointer?: PointerMode;
   participant: string;
   glasses: boolean;
   lighting: string;
@@ -119,6 +151,8 @@ export interface RecordedSession {
   frames: RecordedFrame[];
   /** Wall-clock intervals (performance.now) covered by the local video, in order; null if no video. */
   videoTimeline: { t0: number; t1: number }[] | null;
+  /** Closed-loop Target test results (mode "target"). */
+  targetTest?: { dwellMs: number; timeoutMs: number; trials: TargetTrial[] };
 }
 
 // ---- base64 <-> Float32Array (btoa/atob exist in browsers and in Node) ----

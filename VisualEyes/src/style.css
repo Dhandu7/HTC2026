@@ -275,7 +275,6 @@ body.ve.glass #sheet.rest{background:rgba(255,255,255,0.2);backdrop-filter:blur(
 #cursor{position:fixed;left:0;top:0;border-radius:50%;border:2px solid color-mix(in srgb,var(--coral) 80%,transparent);background:color-mix(in srgb,var(--coral) 12%,transparent);pointer-events:none;z-index:65;transition:transform 30ms linear}
 #cursor.lost{border-style:dashed;border-color:var(--bad);background:color-mix(in srgb,var(--bad) 10%,transparent)}
 #gaze-hint{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:55;background:var(--sheet);color:var(--ink);border:3px solid var(--bad);border-radius:1.25rem;padding:1.25rem 1.75rem;font-size:2rem;font-weight:800;text-align:center;max-width:80vw;pointer-events:none}
-#head-hint{position:fixed;top:.75rem;left:50%;transform:translateX(-50%);z-index:54;background:var(--sheet);color:var(--ink);border:3px solid var(--coral);border-radius:1rem;padding:.75rem 1.5rem;font-size:1.5rem;font-weight:800;pointer-events:none;max-width:90vw;text-align:center}
 #video{position:fixed;width:1px;height:1px;opacity:0;pointer-events:none}
 #target-bar{background:var(--surface);border:2px solid var(--coral);border-radius:1rem;padding:.625rem 1rem;font-size:1.25rem;flex:none}
 #target-bar small{color:var(--mute);font-size:.875rem}
@@ -433,3 +432,18 @@ body.keybig .panel{height:14.5rem}
 body.keybig .k.grp{font-size:3.875rem}
 body.keybig .k{font-size:2.125rem}
 body.keybig #output .msg{font-size:3rem}
+
+/* ---------- keyboard home screen: 5 phrases + Keyboard, 3x2. Extra row gap: vertical pointing is the weak axis ---------- */
+.tray.home{grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));row-gap:1.5rem}
+.tray.home .k.phr{font-size:2.125rem}
+
+/* ---------- target test (closed loop): a button grid, one highlighted goal, and the live pointer ---------- */
+#calibration.target-test{display:flex;flex-direction:column;padding:.75rem;gap:.75rem}
+.tt-msg{text-align:center;font-size:1.5rem;font-weight:800;color:var(--mute);min-height:1.5em}
+.tt-grid{flex:1;display:grid;gap:.75rem}
+.tt-key{--p:0;position:relative;background:var(--cap);border-radius:1rem;border:3px solid transparent;overflow:hidden}
+.tt-key::after{content:"";position:absolute;inset:auto 0 0 0;height:calc(var(--p) * 100%);background:color-mix(in srgb,var(--ring) 28%,transparent)}
+.tt-key.goal{border-color:var(--ring);background:color-mix(in srgb,var(--ring) 22%,var(--cap))}
+.tt-key.ok{background:color-mix(in srgb,var(--ok) 55%,var(--cap))}
+.tt-key.bad{background:color-mix(in srgb,var(--bad) 55%,var(--cap))}
+.tt-cursor{position:fixed;left:0;top:0;width:28px;height:28px;border-radius:50%;border:3px solid var(--coral);background:color-mix(in srgb,var(--coral) 25%,transparent);pointer-events:none;z-index:61}

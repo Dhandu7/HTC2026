@@ -4,9 +4,10 @@ import type { GazeEngine } from "../gaze/engine";
 import type { Sample } from "../gaze/regression";
 import { summarizeErrors, type ErrorStats, type ViewingGeometry } from "../gaze/accuracy";
 import type { FaceFrame } from "../gaze/tracker";
-import type { HeadPos } from "../gaze/fixation";
+import { evaluate } from "../eval/metrics";
+import type { SessionTape } from "../record/tape";
 
-// 5 columns x 4 rows of dots (20: enough for the model, short enough that your seat doesn't drift mid-calibration) across the screen, visited row by row in a serpentine so the head/eyes make short moves.
+// 5 columns x 4 rows of dots (20: enough for the model, short enough that your seat doesn't drift mid-calibration) across the screen, visited row by row in a serpentine so each move to the next dot is short.
 const COLS = 5;
 const ROWS = 4;
 const CAL_POINTS: [number, number][] = Array.from({ length: ROWS }, (_, r) => {
@@ -20,29 +21,59 @@ const VAL_POINTS: [number, number][] = [
 const SETTLE_MS = 700;
 const COLLECT_MS = 1300;
 const DOT_MS = SETTLE_MS + COLLECT_MS;
+/**
+ * Pointer mode: check dots stay up 3.5 s (700 ms settle + 2.8 s collection) instead of 2 s, so
+ * a 2 s dwell fits inside each one. Every calibration then also yields dwell-simulation data
+ * (npm run replay), and the hit rate rests on ~2x the frames. Adds ~6 s.
+ */
+export const POINTER_CHECK_COLLECT_MS = 2800;
 const fmt = (s: number) => (s >= 60 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s` : `${Math.round(s)} s`);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const median = (a: number[]) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)] ?? NaN;
 
-/** Drop frames whose first two features (yaw, pitch for the nose pointer) are outliers for this dot. */
-function trimOutliers(fs: FaceFrame[]): FaceFrame[] {
-  if (fs.length < 8) return fs;
+/**
+ * Indices of the vectors to keep at one dot: drops frames whose first two features (yaw, pitch
+ * for the pointer tracker) are outliers. Pure, so the offline replay applies exactly the same rule.
+ */
+export function trimOutlierIdx(vectors: number[][]): number[] {
+  const all = vectors.map((_, i) => i);
+  if (vectors.length < 8) return all;
   const keep = (i: number) => {
-    const v = fs.map((f) => f.vector[i]);
+    const v = vectors.map((f) => f[i]);
     const m = median(v);
     const mad = median(v.map((x) => Math.abs(x - m))) || 1e-6;
-    return (f: FaceFrame) => Math.abs(f.vector[i] - m) <= 3.5 * mad + 1e-4;
+    return (f: number[]) => Math.abs(f[i] - m) <= 3.5 * mad + 1e-4;
   };
   const kx = keep(0);
   const ky = keep(1);
-  const out = fs.filter((f) => kx(f) && ky(f));
-  return out.length >= 5 ? out : fs;
+  const out = all.filter((i) => kx(vectors[i]) && ky(vectors[i]));
+  return out.length >= 5 ? out : all;
 }
 
-/** Validation result plus a direction check: correlation of predicted vs target position across the check dots. */
-export type CalResult = ErrorStats & { dirX: number; dirY: number };
+/** Drop frames whose first two features (yaw, pitch for the pointer tracker) are outliers for this dot. */
+function trimOutliers(fs: FaceFrame[]): FaceFrame[] {
+  return trimOutlierIdx(fs.map((f) => f.vector)).map((i) => fs[i]);
+}
+
+/**
+ * Validation result plus a direction check (correlation of predicted vs target position across
+ * the check dots) and the distance-independent hit rates: share of check-dot frames inside a
+ * button-sized box for a 6-button (3x2) and a 16-button (4x4) layout.
+ */
+export type CalResult = ErrorStats & {
+  dirX: number;
+  dirY: number;
+  hit6: number;
+  hit16: number;
+  /** Check dots where the face was (mostly) not found: the accuracy numbers can't be trusted. */
+  lostCheckDots: number;
+  checkDots: number;
+};
+
+/** A check dot "lost" the face if fewer than this many usable frames came in (~26 is normal). */
+export const MIN_CHECK_FRAMES = 8;
 
 const corr = (a: number[], b: number[]) => {
   const n = a.length;
@@ -61,7 +92,9 @@ export async function runCalibration(
   engine: GazeEngine,
   root: HTMLElement,
   geometry: () => ViewingGeometry,
-  message = "Look at each dot until it disappears. Keep your head still and comfortable.",
+  message = "Look at each dot until it disappears.",
+  /** Optional: record raw frames against the dots so this calibration can be replayed offline. */
+  tape?: SessionTape,
 ): Promise<CalResult | null> {
   root.innerHTML = `<div class="cal-msg">${message}</div><div class="cal-dot"></div><div class="cal-progress"><div class="cal-bar"><i></i></div><span></span></div>`;
   root.hidden = false;
@@ -70,9 +103,13 @@ export async function runCalibration(
   const bar = root.querySelector<HTMLElement>(".cal-bar i")!;
   const progText = root.querySelector<HTMLElement>(".cal-progress span")!;
   const totalDots = CAL_POINTS.length + VAL_POINTS.length;
+  const checkCollectMs = POINTER_CHECK_COLLECT_MS;
+  const checkDotMs = SETTLE_MS + checkCollectMs;
+  const remainingMs = (done: number) =>
+    Math.max(0, CAL_POINTS.length - done) * DOT_MS + Math.min(VAL_POINTS.length, totalDots - Math.max(done, CAL_POINTS.length)) * checkDotMs;
   const showProgress = (done: number, label: string) => {
     bar.style.width = `${(done / totalDots) * 100}%`;
-    progText.textContent = `${label} · dot ${Math.min(done + 1, totalDots)} of ${totalDots} · about ${fmt((totalDots - done) * (DOT_MS / 1000))} left`;
+    progText.textContent = `${label} · dot ${Math.min(done + 1, totalDots)} of ${totalDots} · about ${fmt(remainingMs(done) / 1000)} left`;
   };
   let frames: FaceFrame[] = [];
   let collecting = false;
@@ -93,18 +130,23 @@ export async function runCalibration(
     dot.classList.add("collect");
   };
 
-  const collectAt = async (p: [number, number]) => {
+  const collectAt = async (p: [number, number], segment: "cal" | "val" = "cal") => {
+    const collectMs = segment === "val" ? checkCollectMs : COLLECT_MS;
+    tape?.show(segment, p[0], p[1]);
     place(p);
+    dot.style.animationDuration = `${(SETTLE_MS + collectMs) / 1000}s`;
     await sleep(SETTLE_MS);
     frames = [];
     collecting = true;
-    await sleep(COLLECT_MS);
+    tape?.collectStart();
+    await sleep(collectMs);
     collecting = false;
+    tape?.collectEnd();
     return frames;
   };
 
   try {
-    msg.innerHTML = `${message}<small>${CAL_POINTS.length} dots, then ${VAL_POINTS.length} check dots: about ${fmt(totalDots * (DOT_MS / 1000))}. Each dot takes ${DOT_MS / 1000} seconds. A helper can press Esc to cancel.</small>`;
+    msg.innerHTML = `${message}<small>${CAL_POINTS.length} dots, then ${VAL_POINTS.length} check dots: about ${fmt(remainingMs(0) / 1000)}. Each dot takes ${DOT_MS / 1000} seconds${checkDotMs !== DOT_MS ? ` (check dots ${checkDotMs / 1000} s)` : ""}. A helper can press Esc to cancel.</small>`;
     showProgress(0, "Starting");
     await sleep(3500);
     msg.textContent = "";
@@ -122,14 +164,9 @@ export async function runCalibration(
       await sleep(2500);
       return null;
     }
-    // Where the head was while calibrating, so the app can warn if it moves away later (eye mode only).
-    const headRefOf = () => {
-      const kept = pts.flatMap((c) => trimOutliers(c.frames));
-      return [0, 1, 2].map((j) => kept.reduce((a, f) => a + f.headPos[j], 0) / kept.length) as HeadPos;
-    };
-    engine.setCalibration(samples, headRefOf());
+    engine.setCalibration(samples);
 
-    // Quality pass: re-collect the dots the fit disagrees with most (head jerked, glanced away, tracker glitch).
+    // Quality pass: re-collect the dots the fit disagrees with most (moved suddenly, glanced away, tracker glitch).
     const resid = pts.map((c, i) => ({
       i,
       r: median(
@@ -149,24 +186,28 @@ export async function runCalibration(
     }
     if (bad.length) {
       samples = build();
-      engine.setCalibration(samples, headRefOf());
+      engine.setCalibration(samples);
     }
 
     msg.textContent = "Checking accuracy…";
     const val: { target: { x: number; y: number }; samples: { x: number; y: number }[] }[] = [];
+    let lostCheckDots = 0;
     for (const [i, p] of VAL_POINTS.entries()) {
       if (cancelled) return null;
       showProgress(CAL_POINTS.length + i, "Checking accuracy");
-      const fs = trimOutliers(await collectAt(p));
+      const raw = await collectAt(p, "val");
+      if (raw.length < MIN_CHECK_FRAMES) lostCheckDots++;
+      const fs = trimOutliers(raw);
       val.push({ target: { x: p[0] * innerWidth, y: p[1] * innerHeight }, samples: fs.map((f) => engine.predictRaw(f.vector)) });
     }
     const stats = summarizeErrors(val, geometry());
-    // Mean prediction per check dot vs where the dot was. Strongly positive = the pointer follows your head/eyes the right way.
+    // Mean prediction per check dot vs where the dot was. Strongly positive = the pointer follows you the right way.
     const have = val.filter((v) => v.samples.length);
     const meanOf = (v: { samples: { x: number; y: number }[] }, k: "x" | "y") => v.samples.reduce((s, q) => s + q[k], 0) / v.samples.length;
     const dirX = have.length >= 3 ? corr(have.map((v) => meanOf(v, "x")), have.map((v) => v.target.x)) : NaN;
     const dirY = have.length >= 3 ? corr(have.map((v) => meanOf(v, "y")), have.map((v) => v.target.y)) : NaN;
-    return { ...stats, dirX, dirY };
+    const hits = evaluate(val.map((v) => ({ target: v.target, preds: v.samples })), innerWidth, innerHeight, geometry()).hitRate;
+    return { ...stats, dirX, dirY, hit6: hits["6-chip (3x2)"], hit16: hits["16-grid (4x4)"], lostCheckDots, checkDots: VAL_POINTS.length };
   } finally {
     off();
     window.removeEventListener("keydown", onKey);

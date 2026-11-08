@@ -4,8 +4,8 @@
 import type { GazeEngine } from "../gaze/engine";
 import type { FaceFrame, FaceTracker } from "../gaze/tracker";
 import {
-  COLLECT_MS,
   SESSION_FORMAT,
+  collectMsFor,
   SETTLE_MS,
   buildProtocol,
   f32ToB64,
@@ -17,7 +17,7 @@ import {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function download(blob: Blob, name: string) {
+export function download(blob: Blob, name: string) {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = name;
@@ -101,14 +101,15 @@ export async function recordSession(
     dot.style.top = `${p.y}px`;
     dot.classList.remove("collect");
     void dot.offsetWidth;
-    dot.style.animationDuration = `${(SETTLE_MS + COLLECT_MS) / 1000}s`;
+    const collectMs = collectMsFor(p.segment, opts.meta.pointer);
+    dot.style.animationDuration = `${(SETTLE_MS + collectMs) / 1000}s`;
     dot.classList.add("collect");
     current = { ti, collecting: false };
     p.tShown = performance.now();
     await sleep(SETTLE_MS);
     p.tCollect0 = performance.now();
     current = { ti, collecting: true };
-    await sleep(COLLECT_MS);
+    await sleep(collectMs);
     p.tCollect1 = performance.now();
     current = null;
   };
@@ -126,7 +127,10 @@ export async function recordSession(
   };
 
   try {
-    msg.textContent = "Look at each dot until it shrinks away. Sit as you normally would. Esc cancels.";
+    msg.textContent =
+      opts.meta.pointer === "pointer"
+        ? "Look at each dot until it disappears. Esc cancels."
+        : "Look at each dot until it shrinks away. Sit as you normally would. Esc cancels.";
     await sleep(2500);
     msg.textContent = "";
     // Group consecutive targets of the same segment/check into one run.
