@@ -3,8 +3,6 @@
   <clipPath id="card"><rect width="1280" height="240" rx="28"/></clipPath>
   <g clip-path="url(#card)">
   <rect width="1280" height="240" fill="#EEF5F6"/>
-  <rect x="0" y="230" width="1280" height="10" fill="#0B4F5C"/>
-  <rect x="0" y="230" width="230" height="10" fill="#E4572E"/>
   </g>
   <svg x="230.9" y="36" width="818.2" height="158.7" viewBox="0 0 1319.6 256">
   <g id="symbol" transform="translate(-8 0)">
