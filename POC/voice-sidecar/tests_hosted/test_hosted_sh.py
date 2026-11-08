@@ -150,3 +150,24 @@ def test_local_lets_the_caller_override_the_defaults(box):
     echo.write_text('#!/bin/sh\nprintf "%s|%s" "$VOICE_STORE" "$CORS_ORIGINS"\n')
     r = run(box, "local", env_file_text="ELEVENLABS_API_KEY=sk_x\n", extra_env={"VOICE_STORE": "dynamodb", "CORS_ORIGINS": "http://example.test"})
     assert r.stdout.splitlines()[-1] == "dynamodb|http://example.test"
+
+
+def test_local_sets_up_python_first_even_when_started_by_a_relative_path(box):
+    """Regression: `bash voice-sidecar/hosted.sh local` on a fresh machine re-ran itself by that relative path after
+    changing directory, and failed with 'No such file or directory'."""
+    log = box / "uv.log"
+    uv = box / "bin" / "uv"
+    uv.write_text(f'#!/bin/sh\necho "uv $*" >> {log}\n')
+    uv.chmod(uv.stat().st_mode | stat.S_IEXEC)
+    env = {
+        "PATH": f"{box / 'bin'}:/usr/bin:/bin",
+        "HOME": str(box),
+        "USER": "tester",
+        "VOICE_ENV_FILE": str(box / "test.env"),
+        "VOICE_PY": str(box / "python-not-installed-yet"),  # not executable: forces the setup step
+    }
+    (box / "test.env").write_text("ELEVENLABS_API_KEY=sk_test_FRESH\n")
+    r = subprocess.run(["bash", "voice-sidecar/hosted.sh", "local"], cwd=SIDECAR.parent, env=env, capture_output=True, text=True, timeout=30)
+    assert "No such file or directory" not in r.stdout + r.stderr or "python-not-installed-yet" in r.stderr
+    assert "hosted.sh: No such file" not in r.stderr
+    assert "pip install" in log.read_text(), "setup (uv pip install) should have run"

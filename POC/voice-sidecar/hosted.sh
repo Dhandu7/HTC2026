@@ -14,6 +14,7 @@
 #   ./hosted.sh config    show the effective configuration, never a secret value
 #   ./hosted.sh smoke ... live ElevenLabs check with YOUR key: see scripts/elevenlabs_smoke.py
 set -euo pipefail
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"   # absolute, because we cd below and $0 may be relative
 cd "$(dirname "$0")"
 PY="${VOICE_PY:-.venv-hosted/bin/python}"   # VOICE_PY exists so the tests can stand in for Python
 
@@ -83,7 +84,7 @@ case "${1:-}" in
     # The one command a teammate needs: first run installs Python 3.12 deps, then serves the API for the app on
     # this machine only (127.0.0.1, in memory, the dev test login). Anything you set yourself still wins.
     shift
-    [ -x "$PY" ] || "$0" setup
+    [ -x "$PY" ] || bash "$SELF" setup
     export VOICE_STORE="${VOICE_STORE:-memory}" AUTH_MODE="${AUTH_MODE:-dev}"
     export CORS_ORIGINS="${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}"
     load_key
