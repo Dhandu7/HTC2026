@@ -7,7 +7,7 @@ export type GazeModel = "kernel" | "ridge";
 
 /**
  * Kernel ridge (RBF, γ=0.03, λ=1) is the default: in dwell simulation on recorded sessions
- * (POC/recordings, `npm run replay`) it selected the right 6-chip button more often than
+ * (VisualEyes/recordings, `npm run replay`) it selected the right 6-chip button more often than
  * the quadratic ridge on every session (mean 77% vs 69%).
  */
 function makeRegressor(model: GazeModel) {

@@ -2,7 +2,7 @@
 // reports accuracy in degrees (with the assumptions shown) and, because the viewing
 // distance is unknown in a demo, the distance-free hit rate for 6-chip / 16-grid layouts.
 //
-// Recorded sessions (POC/recordings, `npm run replay`) showed 25 points is the only
+// Recorded sessions (VisualEyes/recordings, `npm run replay`) showed 25 points is the only
 // change that helped on every session: worst-session 6-chip hit rate 61-71% vs 37-44%
 // with 9 points.
 import type { GazeEngine } from "../gaze/engine";

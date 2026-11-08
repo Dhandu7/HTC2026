@@ -111,7 +111,7 @@ let kb: GazeTypeKeyboard | BaselineKeyboard = gazeKb;
 
 // Switch 200 ms + accumulating dwell (decay 0.5): in dwell simulation on recordings this
 // turned most timed-out looks into correct selections (77% -> 84% correct) without adding
-// wrong ones. See POC/src/eval/dwell.ts.
+// wrong ones. See VisualEyes/src/eval/dwell.ts.
 const targetTracker = new TargetTracker(36, 200);
 const dwell = new AccumulatingDwellSelector(settings.dwellMs, 0.5);
 const blink = new BlinkSelector();
@@ -466,7 +466,7 @@ function openRecord() {
     showToast(
       n === null
         ? "Recording cancelled before validation finished; nothing saved."
-        : `Saved session (${n} frames) to your Downloads. Move it to POC/recordings/ and run <code>npm run replay -- recordings/*.json</code>.`,
+        : `Saved session (${n} frames) to your Downloads. Move it to VisualEyes/recordings/ and run <code>npm run replay -- recordings/*.json</code>.`,
       9000,
     );
   };

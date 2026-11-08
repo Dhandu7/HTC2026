@@ -70,7 +70,7 @@ Every tracking change is judged on the same recorded data, not on a fresh live r
    - **Quick trial, about 80 s:** the 25-point grid plus 8 validation points (no drift). Use it for fast A/B checks; replay still compares 25/13/9/5 points.
    - **Short (stranger), about 1 min:** the app's 9 calibration points plus the 16 validation points.
    - **Every ◎ Calibrate** also saves `gazecal-<id>-<time>.json` (the calibration dots plus the 4 check points) when "Save each calibration" is on in ⚙ Settings (default on). Set your Participant ID there. These replay like any session, so normal use builds up test data.
-2. The browser downloads `gazesession-<id>-<time>.json` (raw landmarks, blendshapes and head pose per frame, about 50 MB for a full session) and, if ticked, a local `.webm` video. Move them to `POC/recordings/`, which git ignores.
+2. The browser downloads `gazesession-<id>-<time>.json` (raw landmarks, blendshapes and head pose per frame, about 50 MB for a full session) and, if ticked, a local `.webm` video. Move them to `VisualEyes/recordings/`, which git ignores.
 3. Run `npm run replay -- recordings/*.json` (add `--json results.json` to save the rows; `--train-from 1100` / `--test-from 1100` use only frames that many ms after each dot appeared). It prints:
    - **Personal:** each calibration set (25/13/9/5 points) × ridge λ (0.1/1/10/100), scored on the validation points. The app now defaults to 25 points with λ=1.
    - **Drift:** one calibration scored at +0, +2, +5 and +10 min, with the median head movement from the calibration pose, and with a simulated one-dot re-centre.
