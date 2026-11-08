@@ -52,7 +52,7 @@ webcam ─► MediaPipe Face Landmarker (478 landmarks + blendshapes + face pose
 | Drift | `src/gaze/engine.ts` | **Implicit recalibration**: a selection that isn't undone within 2 s becomes a down-weighted training sample at the target's centre. |
 | Accuracy units | `src/gaze/accuracy.ts` | Converts px to degrees. Viewing distance is estimated from iris size (11.7 mm) and can be overridden. |
 | Selection | `src/input/selection.ts` | **Dwell** (2 s by default, set in ⚙ Settings). **Deliberate blink** (dwell-free) needs both eyes closed for 350–1500 ms after aiming for at least 150 ms. Involuntary blinks are **counted and reported**, not hidden. |
-| Home | `src/ui/keyboards.ts` | The app opens on **6 large chips (3×2)**: 5 ready-to-speak phrases (one selection speaks a message) and **⌨ Keyboard**, which opens the 4×4 grid. Recorded pointer sessions hit 6 large buttons far more often than the 16-key grid (mean 59% vs 32%). Phrases come from a pluggable source (`homeSource`) so the conversation engine can supply replies. **🗑 Clear** (top bar, or ☰ Done → 🏠 Home) clears the text and returns here. Benchmarks skip it. |
+| Home | `src/ui/keyboards.ts` | The app opens on **6 large chips (3×2)**: 5 ready-to-speak phrases (one selection speaks a message) and **⌨ Keyboard**, which opens the 4×4 grid. Recorded pointer sessions hit 6 large buttons far more often than the 16-key grid (open loop, mean of 7 calibrations on 8 Nov 2026: 62% vs 36%; closed-loop Target test: 100% on both, 2 testers). See [docs/replay-results-2026-11-08.json](docs/replay-results-2026-11-08.json). Phrases come from a pluggable source (`homeSource`) so the conversation engine can supply replies. **🗑 Clear** (top bar, or ☰ Done → 🏠 Home) clears the text and returns here. Benchmarks skip it. |
 | Keyboard | `src/ui/keyboards.ts` | The VisualEyes keyboard has **16 targets in a 4×4 grid**: 4 prediction chips, 8 letter-group keys, delete, accept, phrases/expand, and done. The baseline is a dwell QWERTY. |
 | Prediction | `src/predict/engine.ts` | Decodes ambiguous letter-group keys through a **key-sequence index** (one bucket lookup per key, ~0.4 ms), completes words, and predicts the next word from personal **trigram → bigram** context. Personal and global frequencies are blended, with the personal share growing as the user talks; personal words decay over 30 days; a suggestion picked and deleted within 2 s is ranked lower in that context. Keeps a **personal phrase store** that learns every sentence you speak or insert. **Abbreviation expansion** turns one key per word into a full sentence. |
 | Profiles | `src/profile/profiles.ts` | Each user has separate words, phrases and calibration. A caregiver can add **people's names** (pinned, keep their capitals), an **about** note, and **writing samples** (pasted text or a .txt file) that give prediction a head start. Switch user by gaze from **☰ Done → 👤 Switch user**. Export/import a profile as JSON. All on-device. |
@@ -78,7 +78,7 @@ Tracking changes are judged on recorded data, averaged over **all** recordings, 
 
 ### Why a 4×4 grid of letter groups and not QWERTY
 
-A webcam pointer can't hit a 26-key QWERTY on a laptop screen reliably; large targets work far better (recorded pointer sessions: 6 large buttons ≈ 57% of frames on target vs 16 keys ≈ 31%, so the app opens on 6 and keeps the 16-key grid one step away). Prediction makes up for the ambiguous keys: one key press per letter, and usually 1–3 presses before the word appears as a chip. See [docs/RESEARCH.md](docs/RESEARCH.md).
+A webcam pointer can't hit a 26-key QWERTY on a laptop screen reliably; large targets work far better (recorded pointer sessions, open loop, 7 calibrations on 8 Nov 2026: 6 large buttons 62% of frames on target vs 16 keys 36%, so the app opens on 6 and keeps the 16-key grid one step away; in the closed-loop Target test both testers selected 6 of 6 and 8 of 8 correctly at a median 2.3 to 2.9 s per selection). Prediction makes up for the ambiguous keys: one key press per letter, and usually 1–3 presses before the word appears as a chip. See [docs/RESEARCH.md](docs/RESEARCH.md).
 
 ## Demo script (side-by-side)
 
@@ -95,10 +95,10 @@ Let judges try it. Mouse mode (hover to dwell) runs the same UI and metrics with
 
 ## Honest limitations
 
-- No disabled-user evaluation yet. Every number is from able-bodied testers unless stated otherwise.
+- No disabled-user evaluation yet. Every number is from able-bodied testers unless stated otherwise. The 8 Nov 2026 numbers are from two people on one laptop; the raw recordings (about 10 MB each) are kept out of git and are available on request.
 - Accuracy depends on lighting, glasses, camera and face pose. Report the conditions with every number.
 - The degree figure assumes a screen size (in Settings) and an estimated viewing distance.
-- The word list is the Google 10k list (research/educational use). Swap it before any commercial use.
+- The word list is the 30,000 most frequent English words from wordfreq (CC BY-SA 4.0, attribution in `public/data/WORDS-LICENSE.txt`). It replaced the research-only Google 10k list on 8 Nov 2026; on the held-out persona sentences (`npx tsx scripts/eval-suggestions.ts --local-only`) it needs fewer selections per character for every persona (for example 0.612 → 0.596 with no profile, 0.454 → 0.429 with one).
 - English only for now. Multilingual support is on the roadmap.
 
 ## Roadmap

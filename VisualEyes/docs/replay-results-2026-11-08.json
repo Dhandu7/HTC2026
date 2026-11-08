@@ -1,0 +1,986 @@
+{
+  "accuracy": [
+    {
+      "session": "gazecal-pointer-anon-2026-11-08T15-52-58-552Z",
+      "participant": "anon",
+      "pointer": "pointer",
+      "source": "simple (λ=1)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 4,
+        "nSamples": 223,
+        "accuracyPx": 46.40455788802252,
+        "accuracyDeg": 0.6417185418817922,
+        "accuracyXPx": 15.64228693494394,
+        "accuracyYPx": 42.447175534533386,
+        "precisionSdPx": 125.58857814868702,
+        "precisionSdDeg": 1.7362780851295483,
+        "precisionS2sPx": 29.283235575632858,
+        "precisionS2sDeg": 0.4049616881445673,
+        "meanSampleErrPx": 106.52672125464849,
+        "meanSampleErrDeg": 1.4728719470262952,
+        "hitRate": {
+          "4-chip (2x2)": 0.9506726457399103,
+          "6-chip (3x2)": 0.9506726457399103,
+          "16-grid (4x4)": 0.7399103139013453
+        }
+      }
+    },
+    {
+      "session": "gazecal-pointer-anon-2026-11-08T15-52-58-552Z",
+      "participant": "anon",
+      "pointer": "pointer",
+      "source": "original (λ=30)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 4,
+        "nSamples": 223,
+        "accuracyPx": 239.50273786625834,
+        "accuracyDeg": 3.3084876348664034,
+        "accuracyXPx": 138.8183095089864,
+        "accuracyYPx": 179.53427894884237,
+        "precisionSdPx": 98.9894228633358,
+        "precisionSdDeg": 1.3687000391996922,
+        "precisionS2sPx": 24.318080429075806,
+        "precisionS2sDeg": 0.33629964736919415,
+        "meanSampleErrPx": 251.2333196285511,
+        "meanSampleErrDeg": 3.4701469600911317,
+        "hitRate": {
+          "4-chip (2x2)": 0.5650224215246636,
+          "6-chip (3x2)": 0.48878923766816146,
+          "16-grid (4x4)": 0.2600896860986547
+        }
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-15-39-163Z",
+      "participant": "derek",
+      "pointer": "pointer",
+      "source": "simple (λ=1)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 4,
+        "nSamples": 104,
+        "accuracyPx": 294.8450427937322,
+        "accuracyDeg": 3.7598167436334635,
+        "accuracyXPx": 205.54178383263724,
+        "accuracyYPx": 187.13191846944466,
+        "precisionSdPx": 164.3159481681451,
+        "precisionSdDeg": 2.0974060519194353,
+        "precisionS2sPx": 52.38048949270604,
+        "precisionS2sDeg": 0.6688776344197548,
+        "meanSampleErrPx": 310.63010979489707,
+        "meanSampleErrDeg": 3.96048102017205,
+        "hitRate": {
+          "4-chip (2x2)": 0.7019230769230769,
+          "6-chip (3x2)": 0.6057692307692307,
+          "16-grid (4x4)": 0.3173076923076923
+        }
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-15-39-163Z",
+      "participant": "derek",
+      "pointer": "pointer",
+      "source": "original (λ=10)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 4,
+        "nSamples": 104,
+        "accuracyPx": 515.4642190916007,
+        "accuracyDeg": 6.55383414506603,
+        "accuracyXPx": 438.1327337758605,
+        "accuracyYPx": 148.3761338885303,
+        "precisionSdPx": 385.06279371547873,
+        "precisionSdDeg": 4.905299275204493,
+        "precisionS2sPx": 103.93250254689326,
+        "precisionS2sDeg": 1.326998932755252,
+        "meanSampleErrPx": 546.9621414345683,
+        "meanSampleErrDeg": 6.950506041755368,
+        "hitRate": {
+          "4-chip (2x2)": 0.4326923076923077,
+          "6-chip (3x2)": 0.4230769230769231,
+          "16-grid (4x4)": 0.22115384615384615
+        }
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-29-44-858Z",
+      "participant": "derek",
+      "pointer": "pointer",
+      "source": "simple (λ=1)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 4,
+        "nSamples": 104,
+        "accuracyPx": 256.49488034780177,
+        "accuracyDeg": 3.3988206200257,
+        "accuracyXPx": 108.8113067454847,
+        "accuracyYPx": 215.63084402603144,
+        "precisionSdPx": 77.52119636494717,
+        "precisionSdDeg": 1.0283316695653661,
+        "precisionS2sPx": 32.23629960041357,
+        "precisionS2sDeg": 0.4276578992195511,
+        "meanSampleErrPx": 273.2416973559352,
+        "meanSampleErrDeg": 3.620161020030273,
+        "hitRate": {
+          "4-chip (2x2)": 0.4519230769230769,
+          "6-chip (3x2)": 0.4326923076923077,
+          "16-grid (4x4)": 0.14423076923076922
+        }
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-29-44-858Z",
+      "participant": "derek",
+      "pointer": "pointer",
+      "source": "original (λ=3)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 4,
+        "nSamples": 104,
+        "accuracyPx": 305.2679900889812,
+        "accuracyDeg": 4.043141498723006,
+        "accuracyXPx": 162.46682865450714,
+        "accuracyYPx": 207.96932661795498,
+        "precisionSdPx": 120.79192821805015,
+        "precisionSdDeg": 1.602079595592411,
+        "precisionS2sPx": 40.360866942542486,
+        "precisionS2sDeg": 0.5354355758297137,
+        "meanSampleErrPx": 309.27691956426855,
+        "meanSampleErrDeg": 4.096058462743761,
+        "hitRate": {
+          "4-chip (2x2)": 0.46153846153846156,
+          "6-chip (3x2)": 0.375,
+          "16-grid (4x4)": 0.22115384615384615
+        }
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-31-05-815Z",
+      "participant": "derek",
+      "pointer": "pointer",
+      "source": "simple (λ=1)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 4,
+        "nSamples": 104,
+        "accuracyPx": 137.1809815707919,
+        "accuracyDeg": 1.5819067941350442,
+        "accuracyXPx": 81.72157053509687,
+        "accuracyYPx": 102.49573056487044,
+        "precisionSdPx": 131.86317220747483,
+        "precisionSdDeg": 1.5206136798729453,
+        "precisionS2sPx": 37.92570877384099,
+        "precisionS2sDeg": 0.4374441610579129,
+        "meanSampleErrPx": 167.99954951365424,
+        "meanSampleErrDeg": 1.93704615045008,
+        "hitRate": {
+          "4-chip (2x2)": 0.6634615384615384,
+          "6-chip (3x2)": 0.6346153846153846,
+          "16-grid (4x4)": 0.46153846153846156
+        }
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-31-05-815Z",
+      "participant": "derek",
+      "pointer": "pointer",
+      "source": "original (λ=1)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 4,
+        "nSamples": 104,
+        "accuracyPx": 191.05456201348312,
+        "accuracyDeg": 2.202625950424183,
+        "accuracyXPx": 136.31671123629633,
+        "accuracyYPx": 100.268015550412,
+        "precisionSdPx": 213.31311710322552,
+        "precisionSdDeg": 2.4589413543745233,
+        "precisionS2sPx": 55.29135464921682,
+        "precisionS2sDeg": 0.6377297129677436,
+        "meanSampleErrPx": 258.332927259298,
+        "meanSampleErrDeg": 2.9770494168573487,
+        "hitRate": {
+          "4-chip (2x2)": 0.6538461538461539,
+          "6-chip (3x2)": 0.5480769230769231,
+          "16-grid (4x4)": 0.25
+        }
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-59-15-560Z",
+      "participant": "derek",
+      "pointer": "pointer",
+      "source": "simple (λ=1)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 4,
+        "nSamples": 224,
+        "accuracyPx": 271.6790663921866,
+        "accuracyDeg": 3.399690758684306,
+        "accuracyXPx": 237.73050867177756,
+        "accuracyYPx": 125.43754347614866,
+        "precisionSdPx": 30.5334104713693,
+        "precisionSdDeg": 0.38252709285213826,
+        "precisionS2sPx": 6.576763716652484,
+        "precisionS2sDeg": 0.08239583825817347,
+        "meanSampleErrPx": 272.336049744076,
+        "meanSampleErrDeg": 3.4078926511370153,
+        "hitRate": {
+          "4-chip (2x2)": 0.96875,
+          "6-chip (3x2)": 0.47767857142857145,
+          "16-grid (4x4)": 0.23660714285714285
+        }
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-59-15-560Z",
+      "participant": "derek",
+      "pointer": "pointer",
+      "source": "original (λ=30)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 4,
+        "nSamples": 224,
+        "accuracyPx": 255.58292023036782,
+        "accuracyDeg": 3.1987009571415292,
+        "accuracyXPx": 241.8355485549069,
+        "accuracyYPx": 71.65829322938336,
+        "precisionSdPx": 58.718815505350086,
+        "precisionSdDeg": 0.7356085351774061,
+        "precisionS2sPx": 12.989540506760429,
+        "precisionS2sDeg": 0.1627368694494973,
+        "meanSampleErrPx": 257.12937021021395,
+        "meanSampleErrDeg": 3.2180147124375034,
+        "hitRate": {
+          "4-chip (2x2)": 0.6116071428571429,
+          "6-chip (3x2)": 0.4955357142857143,
+          "16-grid (4x4)": 0.4732142857142857
+        }
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T06-16-53-623Z",
+      "participant": "derek",
+      "pointer": "pointer",
+      "source": "simple (λ=1)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 4,
+        "nSamples": 224,
+        "accuracyPx": 233.22679883412792,
+        "accuracyDeg": 4.136541820684616,
+        "accuracyXPx": 176.82143756845758,
+        "accuracyYPx": 133.65016848479803,
+        "precisionSdPx": 89.31749886420444,
+        "precisionSdDeg": 1.586499665239416,
+        "precisionS2sPx": 12.914582787660974,
+        "precisionS2sDeg": 0.2294523468399481,
+        "meanSampleErrPx": 244.16877039565762,
+        "meanSampleErrDeg": 4.329888505877339,
+        "hitRate": {
+          "4-chip (2x2)": 0.9151785714285714,
+          "6-chip (3x2)": 0.5491071428571429,
+          "16-grid (4x4)": 0.23214285714285715
+        }
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T06-16-53-623Z",
+      "participant": "derek",
+      "pointer": "pointer",
+      "source": "original (λ=10)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 4,
+        "nSamples": 224,
+        "accuracyPx": 361.3865084372534,
+        "accuracyDeg": 6.3940821530063126,
+        "accuracyXPx": 187.63392610746018,
+        "accuracyYPx": 286.82341193730565,
+        "precisionSdPx": 82.23853245679169,
+        "precisionSdDeg": 1.460816542833635,
+        "precisionS2sPx": 21.3603150510263,
+        "precisionS2sDeg": 0.3795034670750162,
+        "meanSampleErrPx": 371.6655062572414,
+        "meanSampleErrDeg": 6.5743800296316275,
+        "hitRate": {
+          "4-chip (2x2)": 0.23214285714285715,
+          "6-chip (3x2)": 0.13839285714285715,
+          "16-grid (4x4)": 0.017857142857142856
+        }
+      }
+    },
+    {
+      "session": "gazesession-derek-test-2026-11-08T04-17-51-703Z",
+      "participant": "derek-test",
+      "pointer": "pointer",
+      "source": "simple (λ=1)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 8,
+        "nSamples": 432,
+        "accuracyPx": 262.88675899534394,
+        "accuracyDeg": 3.2526724791792354,
+        "accuracyXPx": 223.36607081135517,
+        "accuracyYPx": 130.91998992782007,
+        "precisionSdPx": 113.77192666053128,
+        "precisionSdDeg": 1.4089192016389096,
+        "precisionS2sPx": 22.42362056658187,
+        "precisionS2sDeg": 0.2777415524328009,
+        "meanSampleErrPx": 271.7429182816186,
+        "meanSampleErrDeg": 3.362001614841208,
+        "hitRate": {
+          "4-chip (2x2)": 0.7476851851851852,
+          "6-chip (3x2)": 0.6898148148148148,
+          "16-grid (4x4)": 0.3680555555555556
+        }
+      }
+    },
+    {
+      "session": "gazesession-derek-test-2026-11-08T04-17-51-703Z",
+      "participant": "derek-test",
+      "pointer": "pointer",
+      "source": "original (λ=0.1)",
+      "testSet": "check dots",
+      "stats": {
+        "nPoints": 8,
+        "nSamples": 432,
+        "accuracyPx": 369.49132090404134,
+        "accuracyDeg": 4.566901748763809,
+        "accuracyXPx": 264.8850846268095,
+        "accuracyYPx": 223.4491626407432,
+        "precisionSdPx": 229.53823576238102,
+        "precisionSdDeg": 2.8407792577679625,
+        "precisionS2sPx": 47.7698853864475,
+        "precisionS2sDeg": 0.5916669163149146,
+        "meanSampleErrPx": 381.5174568177065,
+        "meanSampleErrDeg": 4.714884786578406,
+        "hitRate": {
+          "4-chip (2x2)": 0.6157407407407407,
+          "6-chip (3x2)": 0.4976851851851852,
+          "16-grid (4x4)": 0.1875
+        }
+      }
+    }
+  ],
+  "dwell": [
+    {
+      "session": "gazecal-pointer-anon-2026-11-08T15-52-58-552Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 4,
+        "correct": 0.75,
+        "wrong": 0,
+        "none": 0.25,
+        "meanTimeMs": 2844.9333333174386
+      }
+    },
+    {
+      "session": "gazecal-pointer-anon-2026-11-08T15-52-58-552Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 4,
+        "correct": 0.75,
+        "wrong": 0,
+        "none": 0.25,
+        "meanTimeMs": 2861.633333325386
+      }
+    },
+    {
+      "session": "gazecal-pointer-anon-2026-11-08T15-52-58-552Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 4,
+        "correct": 0.5,
+        "wrong": 0,
+        "none": 0.5,
+        "meanTimeMs": 3217.9500000178814
+      }
+    },
+    {
+      "session": "gazecal-pointer-anon-2026-11-08T15-52-58-552Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 4,
+        "correct": 0.5,
+        "wrong": 0.25,
+        "none": 0.25,
+        "meanTimeMs": 2749.550000011921
+      }
+    },
+    {
+      "session": "gazecal-pointer-anon-2026-11-08T15-52-58-552Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 4,
+        "correct": 0.25,
+        "wrong": 0,
+        "none": 0.75,
+        "meanTimeMs": 2767.400000035763
+      }
+    },
+    {
+      "session": "gazecal-pointer-anon-2026-11-08T15-52-58-552Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 4,
+        "correct": 0,
+        "wrong": 0,
+        "none": 1,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-15-39-163Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-15-39-163Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-15-39-163Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-15-39-163Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-15-39-163Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-15-39-163Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-29-44-858Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-29-44-858Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-29-44-858Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-29-44-858Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-29-44-858Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-29-44-858Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-31-05-815Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-31-05-815Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-31-05-815Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-31-05-815Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-31-05-815Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-31-05-815Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 0,
+        "correct": null,
+        "wrong": null,
+        "none": null,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-59-15-560Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 4,
+        "correct": 1,
+        "wrong": 0,
+        "none": 0,
+        "meanTimeMs": 2391.2750000059605
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-59-15-560Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 4,
+        "correct": 0.5,
+        "wrong": 0.5,
+        "none": 0,
+        "meanTimeMs": 2687.4000000059605
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-59-15-560Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 4,
+        "correct": 0.25,
+        "wrong": 0.5,
+        "none": 0.25,
+        "meanTimeMs": 2737.699999988079
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-59-15-560Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 4,
+        "correct": 0.5,
+        "wrong": 0.25,
+        "none": 0.25,
+        "meanTimeMs": 2195.9000000059605
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-59-15-560Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 4,
+        "correct": 0.5,
+        "wrong": 0.25,
+        "none": 0.25,
+        "meanTimeMs": 2345.75
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T04-59-15-560Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 4,
+        "correct": 0.5,
+        "wrong": 0.5,
+        "none": 0,
+        "meanTimeMs": 2737.4000000059605
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T06-16-53-623Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 4,
+        "correct": 1,
+        "wrong": 0,
+        "none": 0,
+        "meanTimeMs": 2359
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T06-16-53-623Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 4,
+        "correct": 0.5,
+        "wrong": 0.25,
+        "none": 0.25,
+        "meanTimeMs": 2479.949999988079
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T06-16-53-623Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 4,
+        "correct": 0.25,
+        "wrong": 0.75,
+        "none": 0,
+        "meanTimeMs": 3138
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T06-16-53-623Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 4,
+        "correct": 0.25,
+        "wrong": 0.5,
+        "none": 0.25,
+        "meanTimeMs": 2786.899999976158
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T06-16-53-623Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 4,
+        "correct": 0,
+        "wrong": 0.25,
+        "none": 0.75,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazecal-pointer-derek-2026-11-08T06-16-53-623Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 4,
+        "correct": 0,
+        "wrong": 0.5,
+        "none": 0.5,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazesession-derek-test-2026-11-08T04-17-51-703Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 8,
+        "correct": 0.75,
+        "wrong": 0,
+        "none": 0.25,
+        "meanTimeMs": 2681.0333333412805
+      }
+    },
+    {
+      "session": "gazesession-derek-test-2026-11-08T04-17-51-703Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 8,
+        "correct": 0.75,
+        "wrong": 0,
+        "none": 0.25,
+        "meanTimeMs": 2714.3500000039735
+      }
+    },
+    {
+      "session": "gazesession-derek-test-2026-11-08T04-17-51-703Z",
+      "pointer": "pointer",
+      "source": "simple",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 8,
+        "correct": 0,
+        "wrong": 0.25,
+        "none": 0.75,
+        "meanTimeMs": null
+      }
+    },
+    {
+      "session": "gazesession-derek-test-2026-11-08T04-17-51-703Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "4-chip (2x2)",
+      "stats": {
+        "n": 8,
+        "correct": 0.5,
+        "wrong": 0,
+        "none": 0.5,
+        "meanTimeMs": 2995.375000014901
+      }
+    },
+    {
+      "session": "gazesession-derek-test-2026-11-08T04-17-51-703Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "6-chip (3x2)",
+      "stats": {
+        "n": 8,
+        "correct": 0.25,
+        "wrong": 0.125,
+        "none": 0.625,
+        "meanTimeMs": 3003.2000000178814
+      }
+    },
+    {
+      "session": "gazesession-derek-test-2026-11-08T04-17-51-703Z",
+      "pointer": "pointer",
+      "source": "original",
+      "layout": "16-grid (4x4)",
+      "stats": {
+        "n": 8,
+        "correct": 0,
+        "wrong": 0.25,
+        "none": 0.75,
+        "meanTimeMs": null
+      }
+    }
+  ],
+  "targets": [
+    {
+      "session": "gazetarget-pointer-chetan-2026-11-08T15-56-59-762Z",
+      "pointer": "pointer",
+      "layout": "6-chip (3x2)",
+      "trials": 6,
+      "correct": 1,
+      "wrong": 0,
+      "timeout": 0,
+      "medianTimeMs": 2307.400000035763,
+      "cornerCorrect": 1
+    },
+    {
+      "session": "gazetarget-pointer-chetan-2026-11-08T15-56-59-762Z",
+      "pointer": "pointer",
+      "layout": "16-grid (4x4)",
+      "trials": 8,
+      "correct": 1,
+      "wrong": 0,
+      "timeout": 0,
+      "medianTimeMs": 2858.600000023842,
+      "cornerCorrect": 1
+    },
+    {
+      "session": "gazetarget-pointer-derek-2026-11-08T15-55-49-307Z",
+      "pointer": "pointer",
+      "layout": "6-chip (3x2)",
+      "trials": 6,
+      "correct": 1,
+      "wrong": 0,
+      "timeout": 0,
+      "medianTimeMs": 2591.699999988079,
+      "cornerCorrect": 1
+    },
+    {
+      "session": "gazetarget-pointer-derek-2026-11-08T15-55-49-307Z",
+      "pointer": "pointer",
+      "layout": "16-grid (4x4)",
+      "trials": 8,
+      "correct": 1,
+      "wrong": 0,
+      "timeout": 0,
+      "medianTimeMs": 2710.899999976158,
+      "cornerCorrect": 1
+    }
+  ],
+  "summary": [
+    {
+      "pointer": "pointer",
+      "model": "simple",
+      "beats original (6-chip)": "6 of 7",
+      "recordings": 7,
+      "6-chip hit": "62%",
+      "16-grid hit": "36%",
+      "offset x/y px": "150/134",
+      "6-chip dwell ok/wrong": "63%/19%",
+      "16-grid dwell ok/wrong": "25%/38%"
+    },
+    {
+      "pointer": "pointer",
+      "model": "original",
+      "beats original (6-chip)": "",
+      "recordings": 7,
+      "6-chip hit": "42%",
+      "16-grid hit": "23%",
+      "offset x/y px": "224/174",
+      "6-chip dwell ok/wrong": "25%/16%",
+      "16-grid dwell ok/wrong": "13%/31%"
+    }
+  ]
+}

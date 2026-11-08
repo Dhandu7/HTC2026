@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { SESSION_FORMAT, type RecordedSession } from "../src/record/format";
-import { accuracyRows, dwellRows, prepare, targetRows, trackingLost, type DwellRow, type ResultRow } from "../src/eval/replay";
+import { accuracyRows, dwellRows, prepare, targetRows, trackingLost, type DwellRow, type ResultRow, type TargetRow } from "../src/eval/replay";
 
 const args = process.argv.slice(2);
 const jsonIdx = args.indexOf("--json");
@@ -143,6 +143,6 @@ console.log(
 );
 
 if (jsonOut) {
-  writeFileSync(jsonOut, JSON.stringify({ accuracy: acc, dwell, summary } satisfies { accuracy: ResultRow[]; dwell: DwellRow[]; summary: unknown }, null, 2));
+  writeFileSync(jsonOut, JSON.stringify({ accuracy: acc, dwell, targets, summary } satisfies { accuracy: ResultRow[]; dwell: DwellRow[]; targets: TargetRow[]; summary: unknown }, null, 2));
   console.log(`\nwrote ${jsonOut}`);
 }

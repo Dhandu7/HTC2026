@@ -1,0 +1,17 @@
+words-30k.txt: the 30,000 most frequent English words, most common first, one per line.
+
+Generated on 8 November 2026 from the wordfreq project by Robyn Speer
+(https://github.com/rspeer/wordfreq), English list, "best" frequencies, using
+wordfreq.top_n_list("en", ...). Tokens that are not plain words (digits, symbols,
+single letters other than "a" and "i") were dropped, and the app's slur filter
+(src/safety/slurs.ts) removed 13 entries.
+
+Licence of the data: Creative Commons Attribution-ShareAlike 4.0
+(https://creativecommons.org/licenses/by-sa/4.0/). Attribution: Robyn Speer, wordfreq.
+wordfreq's English frequencies combine several sources, which it credits in its own
+documentation, including SUBTLEX (Brysbaert et al.; freely available data), OpenSubtitles,
+Google Books Ngrams, Wikipedia, Twitter and the Leeds Internet Corpus.
+
+This file replaces the earlier "Google 10k English" list, which was for research and
+educational use only. On the repo's held-out persona sentences (scripts/eval-suggestions.ts
+--local-only) the new list needs fewer selections per character for every persona.

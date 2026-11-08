@@ -1671,7 +1671,8 @@ voiceCtl.subscribe(() => {
 // ---------- boot ----------
 async function boot() {
   applyLook();
-  const words = await fetch("./data/words-10k.txt").then((r) => r.text());
+  // 30k English words by frequency (wordfreq, CC BY-SA 4.0; see public/data/WORDS-LICENSE.txt).
+  const words = await fetch("./data/words-30k.txt").then((r) => r.text());
   predictor.load(words.split("\n"), CORE_WORDS, SEED_PHRASES);
   await initAccount();
   applyProfile(profiles.active);

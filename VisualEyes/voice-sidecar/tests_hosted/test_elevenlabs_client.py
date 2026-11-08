@@ -1,3 +1,4 @@
+import httpx
 import pytest
 
 from fake_elevenlabs import API_KEY, FakeElevenLabs
@@ -40,6 +41,28 @@ def test_delete_removes_the_voice_and_a_missing_voice_is_reported_as_missing():
     assert vid not in fake.voices
     with pytest.raises(RemoteVoiceMissing):
         c.delete_voice(vid)
+
+
+@pytest.mark.parametrize(
+    "code,detail",
+    [
+        (400, {"status": "voice_does_not_exist", "message": "A voice with the voice_id abc does not exist."}),
+        (400, {"status": "voice_not_found", "message": "Voice not found."}),
+        (422, {"status": "invalid", "message": "Voice with voice_id abc was not found."}),
+    ],
+)
+def test_a_voice_deleted_in_the_dashboard_counts_as_missing_whatever_the_http_code(code, detail):
+    # ElevenLabs reports a voice that is already gone with a 400 as well as a 404; a delete must treat it as done.
+    c = ElevenLabsClient(API_KEY, transport=httpx.MockTransport(lambda req: httpx.Response(code, json={"detail": detail})))
+    with pytest.raises(RemoteVoiceMissing):
+        c.delete_voice("21m00Tcm4TlvDq8ikWAM")
+
+
+def test_other_bad_requests_are_still_errors():
+    c = ElevenLabsClient(API_KEY, transport=httpx.MockTransport(lambda req: httpx.Response(400, json={"detail": {"status": "invalid_settings", "message": "Stability must be between 0 and 1."}})))
+    with pytest.raises(ElevenLabsError) as e:
+        c.delete_voice("21m00Tcm4TlvDq8ikWAM")
+    assert not isinstance(e.value, RemoteVoiceMissing)
 
 
 def test_the_key_goes_only_in_the_header_and_never_in_urls_or_errors():

@@ -19,12 +19,13 @@ import { pickSamples } from "../src/profile/profiles";
 import { PERSONAS, type Persona } from "./eval/personas";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const WORDS = readFileSync(join(here, "../public/data/words-10k.txt"), "utf8").split("\n");
 const args = process.argv.slice(2);
 const opt = (name: string, d: string) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : d;
 };
+/** --words <file>: score another frequency list (one word per line, most common first) against the app's. */
+const WORDS = readFileSync(opt("--words", join(here, "../public/data/words-30k.txt")), "utf8").split("\n");
 const LOCAL_ONLY = args.includes("--local-only");
 const URL = opt("--url", "http://localhost:8787");
 const OUT = opt("--out", "");
