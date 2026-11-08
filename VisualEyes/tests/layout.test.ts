@@ -5,7 +5,7 @@ import { GazeTypeKeyboard, type KeyboardHost } from "../src/ui/keyboards";
 const fakeRoot = () => ({ innerHTML: "", className: "" }) as unknown as HTMLElement;
 
 describe("typing grid layout", () => {
-  it("keeps ⌫ out of the corners (row 3, column 2) and puts WXYZ in the bottom-left corner", () => {
+  it("puts the letter groups in alphabetical order and the controls on the bottom row", () => {
     const engine = new PredictionEngine(memoryStore(), () => 1_000_000);
     engine.load(["hello"], ["yes"], ["Thank you"]);
     const host = { refresh: () => {}, action: () => {}, overlay: false, profiles: () => [], activeProfileId: () => "" } as unknown as KeyboardHost;
@@ -17,8 +17,10 @@ describe("typing grid layout", () => {
     const cells = [...root.innerHTML.matchAll(/<div class="g(?: [^"]*)?"(?: data-target="([^"]*)")?/g)].map((m) => m[1] ?? "empty");
     expect(cells).toHaveLength(16);
     const at = (row: number, col: number) => cells[(row - 1) * 4 + (col - 1)];
-    expect(at(3, 2)).toBe("del");
-    expect(at(4, 1)).toBe("g:7");
-    expect([at(1, 1), at(1, 4), at(4, 1), at(4, 4)]).not.toContain("del");
+    // Row 2: ABC DEF GHI JKL. Row 3: MNO PQRS TUV WXYZ.
+    expect([1, 2, 3, 4].map((c) => at(2, c))).toEqual(["g:0", "g:1", "g:2", "g:3"]);
+    expect([1, 2, 3, 4].map((c) => at(3, c))).toEqual(["g:4", "g:5", "g:6", "g:7"]);
+    // Row 4: Delete, Space, Phrases/Expand, Done.
+    expect([1, 2, 3, 4].map((c) => at(4, c))).toEqual(["del", "space", "phrases", "menu"]);
   });
 });
