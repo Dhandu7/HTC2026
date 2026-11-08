@@ -39,7 +39,8 @@ describe("voice-local launcher", () => {
 
   it("uses safe local defaults but lets the caller override them", () => {
     const e = serviceEnv({ PATH: "/bin" }, "sk_x");
-    expect(e).toMatchObject({ ELEVENLABS_API_KEY: "sk_x", VOICE_STORE: "memory", AUTH_MODE: "accounts", CORS_ORIGINS: DEFAULT_CORS });
+    expect(e).toMatchObject({ ELEVENLABS_API_KEY: "sk_x", VOICE_STORE: "memory", AUTH_MODE: "dev", CORS_ORIGINS: DEFAULT_CORS });
+    expect(serviceEnv({ AUTH0_DOMAIN: "t.auth0.com", AUTH0_AUDIENCE: "https://api" }, "sk_x").AUTH_MODE).toBe("auth0");
     const o = serviceEnv({ VOICE_STORE: "dynamodb", AUTH_MODE: "jwt", CORS_ORIGINS: "http://x.test" }, "sk_x");
     expect(o).toMatchObject({ VOICE_STORE: "dynamodb", AUTH_MODE: "jwt", CORS_ORIGINS: "http://x.test" });
   });
@@ -49,5 +50,6 @@ describe("voice-local launcher", () => {
     expect(withEnvFile({}, text)).toMatchObject({ VOICE_STORE: "dynamodb", VOICE_TABLE_NAME: "vocaleyes-voices", AWS_REGION: "us-east-1" });
     expect(withEnvFile({ VOICE_STORE: "memory" }, text).VOICE_STORE).toBe("memory");
     expect(withEnvFile({}, "").VOICE_STORE).toBeUndefined();
+    expect(withEnvFile({}, "VITE_AUTH0_DOMAIN=t.auth0.com\nVITE_AUTH0_AUDIENCE=https://api\n")).toMatchObject({ AUTH0_DOMAIN: "t.auth0.com", AUTH0_AUDIENCE: "https://api" });
   });
 });

@@ -4,7 +4,7 @@
 // (different folder layout: Scripts\ and python.exe), so it gets the same steps done here:
 //   1. first run: make a Python 3.12 environment with uv and install the requirements
 //   2. read ELEVENLABS_API_KEY from VisualEyes/.env
-//   3. serve on 127.0.0.1:8790, in memory, with accounts (sign-in) plus the dev test login (this machine only)
+//   3. serve on 127.0.0.1:8790, in memory, with Auth0 sign-in if configured plus the dev test login (this machine only)
 // The key is read as text, never run as a script, never printed.
 import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -49,16 +49,20 @@ export function serviceEnv(env: NodeJS.ProcessEnv, key: string): NodeJS.ProcessE
     ...env,
     ELEVENLABS_API_KEY: key,
     VOICE_STORE: env.VOICE_STORE || "memory",
-    AUTH_MODE: env.AUTH_MODE || "accounts", // sign-in works; on 127.0.0.1 the dev test login still does too
+    // Auth0 sign-in when it is configured (on 127.0.0.1 the dev test login still works too), else the dev login alone.
+    AUTH_MODE: env.AUTH_MODE || (env.AUTH0_DOMAIN && env.AUTH0_AUDIENCE ? "auth0" : "dev"),
     CORS_ORIGINS: env.CORS_ORIGINS || DEFAULT_CORS,
   };
 }
 
 /** Non-secret settings that may come from VisualEyes/.env (as hosted.sh reads them); the real environment wins. */
-export const ENV_FILE_SETTINGS = ["VOICE_STORE", "VOICE_TABLE_NAME", "AWS_REGION", "ACCOUNTS_SIGNING_KEY_SECRET_ID"] as const;
+export const ENV_FILE_SETTINGS = ["VOICE_STORE", "VOICE_TABLE_NAME", "AWS_REGION", "AUTH0_DOMAIN", "AUTH0_AUDIENCE"] as const;
 export function withEnvFile(env: NodeJS.ProcessEnv, envText: string): NodeJS.ProcessEnv {
   const out = { ...env };
   for (const k of ENV_FILE_SETTINGS) if (!out[k]) out[k] = parseEnvValue(envText, k) || undefined;
+  // The app's Auth0 settings (VITE_AUTH0_*) name the same tenant and API.
+  out.AUTH0_DOMAIN ||= parseEnvValue(envText, "VITE_AUTH0_DOMAIN") || undefined;
+  out.AUTH0_AUDIENCE ||= parseEnvValue(envText, "VITE_AUTH0_AUDIENCE") || undefined;
   return out;
 }
 

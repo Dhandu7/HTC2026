@@ -19,7 +19,8 @@ import { HostedVoiceApi } from "./voice/hostedApi";
 import { HostedVoiceController, friendlyReason } from "./voice/hostedController";
 import { HostedVoice, BrowserAudioSink } from "./voice/hostedVoice";
 import { apiConfigFrom, loadVoiceApiSettings, saveVoiceApiSettings, setTokenProvider, usingDevLogin, type VoiceApiSettings } from "./voice/hostedConfig";
-import { AccountApi, PrefsSync, SessionStore, type AccountUser, type Session, type SyncedPrefs } from "./account/account";
+import { AccountApi, PrefsSync, setSkippedSignIn, skippedSignIn, type SyncedPrefs } from "./account/account";
+import { Auth0Session, auth0Config, canRedirect, type SignedInUser } from "./account/auth0";
 import { mountAuthScreen } from "./ui/authScreen";
 import { mountMyVoice } from "./ui/myVoice";
 import { startVoiceCommands } from "./input/voice";
@@ -994,13 +995,15 @@ async function refreshServices(attempt = 0) {
   if (ai.reason === "no-server" && attempt < 30) setTimeout(() => void refreshServices(attempt + 1), 2000);
 }
 
-// ---------- account: sign in, create account, preferences in the cloud ----------
-// The account service is the same hosted service as "My voice" (one address in its settings). Signing in gives the
-// voice routes a real token instead of the dev login, and keeps settings + the profile in step across computers.
-const sessions = new SessionStore(localStorage);
+// ---------- account: Auth0 sign-in, preferences and voice in the cloud ----------
+// Auth0 signs people in (passwords, sign-up, resets, social logins). Its access token goes to our hosted service (the
+// same one as "My voice"), which keys each person's preferences and voice in DynamoDB by their Auth0 user id.
+const auth0Cfg = auth0Config((import.meta as unknown as { env: Record<string, string | undefined> }).env);
+const auth = auth0Cfg && canRedirect() ? new Auth0Session(auth0Cfg) : null;
 const accountApi = new AccountApi(() => voiceApiSettings.baseUrl);
-let account: Session | null = sessions.get();
+let account: SignedInUser | null = null;
 const ACCOUNT_PROFILE = "gazetype.accountProfile.";
+const token = async () => (account && auth ? auth.token() : null);
 
 function collectPrefs(): SyncedPrefs {
   const p = profiles.active;
@@ -1031,39 +1034,50 @@ function applyRemotePrefs(r: SyncedPrefs) {
 }
 
 /** The local profile that belongs to this account: the one used last time, else the current one if no other account claimed it, else a new one. */
-function profileFor(user: AccountUser): string {
-  const linked = localStorage.getItem(ACCOUNT_PROFILE + user.userId);
+function profileFor(user: SignedInUser): string {
+  const linked = localStorage.getItem(ACCOUNT_PROFILE + user.sub);
   if (linked && profiles.list().some((p) => p.id === linked)) return linked;
   const claimed = new Set<string>();
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
     if (k?.startsWith(ACCOUNT_PROFILE)) claimed.add(localStorage.getItem(k) ?? "");
   }
-  const id = claimed.has(profiles.active.id) ? profiles.create(user.name || user.email).id : profiles.active.id;
-  localStorage.setItem(ACCOUNT_PROFILE + user.userId, id);
+  const id = claimed.has(profiles.active.id) ? profiles.create(user.name || user.email || "Me").id : profiles.active.id;
+  localStorage.setItem(ACCOUNT_PROFILE + user.sub, id);
   return id;
 }
 
-const prefsSync = new PrefsSync(accountApi, () => account?.token ?? null, collectPrefs, (e) => {
-  if (e.status === 401) void signOut("Your sign-in has expired. Sign in again to keep your settings in step.");
-});
+const prefsSync = new PrefsSync(
+  accountApi,
+  token,
+  collectPrefs,
+  (e) => {
+    if (e.status === 401) void signOut("Your sign-in has ended. Sign in again to keep your settings in step.");
+  },
+  1500,
+  () => account !== null,
+);
 prefsChanged = () => prefsSync.schedule();
 
 function updateAccountLine() {
-  $("#account-line").textContent = account ? `Signed in as ${account.user.name || account.user.email}` : "Not signed in: settings stay on this computer.";
+  $("#account-line").textContent = account ? `Signed in as ${account.name || account.email || "you"}` : "Not signed in: settings stay on this computer.";
   $("#account-btn").textContent = account ? "Sign out" : "Sign in";
+  $("#account-btn").hidden = !auth;
 }
 
-async function startAccount(s: Session, isNew: boolean) {
-  account = s;
-  sessions.save(s);
-  setTokenProvider(() => sessions.get()?.token ?? null);
-  switchProfile(profileFor(s.user));
-  if (isNew && s.user.name) profiles.update(profiles.active.id, { name: s.user.name });
+async function startAccount(user: SignedInUser) {
+  account = user;
+  setSkippedSignIn(localStorage, false);
+  setTokenProvider(token); // "My voice" now belongs to this Auth0 user
+  const firstTime = !localStorage.getItem(ACCOUNT_PROFILE + user.sub);
+  switchProfile(profileFor(user));
+  if (firstTime && user.name && profiles.active.name === "Me") profiles.update(profiles.active.id, { name: user.name });
   applyProfile(profiles.active);
   updateAccountLine();
-  void voiceCtl.refresh().then(updateTtsLine); // their voice, not the test login's
+  void voiceCtl.refresh().then(updateTtsLine);
   try {
+    const t = await token();
+    if (t) void accountApi.me(t).catch(() => {}); // lets the service save this person's email and name next to their data
     const remote = await prefsSync.pull(); // the service's copy wins; a brand-new account gets this computer's
     if (remote) applyRemotePrefs(remote);
   } catch (e) {
@@ -1072,39 +1086,50 @@ async function startAccount(s: Session, isNew: boolean) {
 }
 
 async function signOut(message?: string) {
-  if (account && sessions.get()) await prefsSync.flush(); // don't lose a change made in the last second
+  if (account) await prefsSync.flush(); // don't lose a change made in the last second
   account = null;
-  sessions.clear();
   setTokenProvider(null);
   updateAccountLine();
-  void voiceCtl.refresh().then(updateTtsLine);
-  authScreen.show();
   if (message) showToast(esc(message), 6000);
+  await auth?.signOut(); // ends the Auth0 session too, then comes back to this page signed out
 }
 
 const authScreen = mountAuthScreen({
   root: $("#auth"),
-  api: accountApi,
-  onSignedIn: (s, isNew) => {
-    authScreen.hide();
-    void startAccount(s, isNew);
-    showToast(isNew ? `Welcome, <b>${esc(s.user.name || s.user.email)}</b>. Your settings are saved to your account.` : `Signed in as <b>${esc(s.user.name || s.user.email)}</b>`);
-  },
+  unavailable: () =>
+    !auth0Cfg
+      ? "Sign-in isn't set up on this copy yet (VITE_AUTH0_DOMAIN, VITE_AUTH0_CLIENT_ID and VITE_AUTH0_AUDIENCE in VisualEyes/.env)."
+      : !canRedirect()
+        ? "Sign-in needs the web version of GazeType. You can still use it without an account here."
+        : null,
+  signIn: (signUp) => (auth ? auth.signIn(signUp) : Promise.reject(new Error("sign-in is not set up"))),
   onSkip: () => {
-    sessions.setSkipped(true);
+    setSkippedSignIn(localStorage, true);
     authScreen.hide();
   },
 });
 $("#account-btn").addEventListener("click", () => (account ? void signOut() : authScreen.show()));
-if (account) setTokenProvider(() => sessions.get()?.token ?? null); // before boot asks the service about this user's voice
+
+/** Finish an Auth0 redirect or restore the last session, before anything asks the service about this user's voice. */
+async function initAccount() {
+  let user: SignedInUser | null = null;
+  if (auth) {
+    try {
+      user = await auth.init();
+    } catch (e) {
+      showToast(`Sign-in problem: ${esc((e as Error).message)}`, 8000);
+    }
+  }
+  if (user) await startAccount(user);
+  else if (!skippedSignIn(localStorage)) authScreen.show();
+  updateAccountLine();
+}
 
 // ---------- boot ----------
 async function boot() {
   const words = await fetch("./data/words-10k.txt").then((r) => r.text());
   predictor.load(words.split("\n"), CORE_WORDS, SEED_PHRASES);
-  if (account) void startAccount(account, false);
-  else if (!sessions.skipped()) authScreen.show();
-  updateAccountLine();
+  await initAccount();
   applyProfile(profiles.active);
   gazeKb.update();
   render();

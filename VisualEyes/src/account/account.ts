@@ -1,20 +1,11 @@
-// Accounts: sign up, sign in, and the signed-in person's preferences, kept by the hosted service in DynamoDB
-// (voice-sidecar/voice_sidecar/accounts.py). The password goes to the service once over HTTPS and is never stored
-// here; the service keeps only an argon2id hash. What we keep on this device is the signed token, until it expires
-// or the person signs out.
+// The signed-in person's profile and preferences, kept by the hosted service in DynamoDB
+// (voice-sidecar/voice_sidecar/users.py). Sign-in is Auth0's (auth0.ts): this file only ever sends Auth0's access token.
 
-export interface AccountUser {
+export interface Me {
   userId: string;
-  email: string;
-  name: string;
-  createdAt: string;
-}
-
-export interface Session {
-  token: string;
-  /** ISO time the token stops working. */
-  expiresAt: string;
-  user: AccountUser;
+  email: string | null;
+  name: string | null;
+  emailVerified: boolean;
 }
 
 export interface RemotePrefs {
@@ -47,52 +38,46 @@ export class AccountApi {
     private readonly fetchImpl: typeof fetch = (...a) => fetch(...a),
   ) {}
 
-  private async call<T>(path: string, init: RequestInit & { token?: string } = {}): Promise<T> {
-    const { token, ...rest } = init;
-    const headers: Record<string, string> = { ...((rest.headers as Record<string, string>) ?? {}) };
-    if (rest.body) headers["Content-Type"] = "application/json";
-    if (token) headers.Authorization = `Bearer ${token}`;
+  private async call<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
+    const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+    if (init.body) headers["Content-Type"] = "application/json";
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
     let resp: Response;
     try {
-      resp = await this.fetchImpl(this.baseUrl().replace(/\/$/, "") + path, { ...rest, headers, signal: ctl.signal });
+      resp = await this.fetchImpl(this.baseUrl().replace(/\/$/, "") + path, { ...init, headers, signal: ctl.signal });
     } catch {
-      throw new AccountError("Could not reach the account service. Check your connection and try again.");
+      throw new AccountError("Could not reach the service. Check your connection and try again.");
     } finally {
       clearTimeout(timer);
     }
-    let body: { error?: string; detail?: unknown } & Record<string, unknown> = {};
+    let body: { error?: string } & Record<string, unknown> = {};
     try {
       body = await resp.json();
     } catch {
       /* not JSON */
     }
     if (!resp.ok) {
-      const msg = body.error ?? (resp.status === 422 ? "Fill in every field." : `The account service answered with an error (${resp.status}).`);
+      const msg = body.error ?? `The service answered with an error (${resp.status}).`;
       throw new AccountError(msg.charAt(0).toUpperCase() + msg.slice(1) + (msg.endsWith(".") ? "" : "."), resp.status);
     }
     return body as T;
   }
 
-  signUp(email: string, password: string, name: string): Promise<Session> {
-    return this.call("/v1/auth/signup", { method: "POST", body: JSON.stringify({ email, password, name }) });
-  }
-
-  signIn(email: string, password: string): Promise<Session> {
-    return this.call("/v1/auth/signin", { method: "POST", body: JSON.stringify({ email, password }) });
+  async me(token: string): Promise<Me> {
+    return (await this.call<{ user: Me }>("/v1/me", token)).user;
   }
 
   getPreferences(token: string): Promise<RemotePrefs> {
-    return this.call("/v1/me/preferences", { token });
+    return this.call("/v1/me/preferences", token);
   }
 
   putPreferences(token: string, preferences: SyncedPrefs, version?: number): Promise<RemotePrefs> {
-    return this.call("/v1/me/preferences", { method: "PUT", token, body: JSON.stringify({ preferences, version }) });
+    return this.call("/v1/me/preferences", token, { method: "PUT", body: JSON.stringify({ preferences, version }) });
   }
 }
 
-// ---------- the session on this device ----------
+// ---------- "use without an account" ----------
 
 export interface KV {
   getItem(k: string): string | null;
@@ -100,56 +85,10 @@ export interface KV {
   removeItem(k: string): void;
 }
 
-const SESSION_KEY = "gazetype.session.v1";
 /** Set when someone chose "use without an account", so the sign-in screen does not nag on every start. */
 const SKIP_KEY = "gazetype.session.skipped.v1";
-
-export class SessionStore {
-  constructor(
-    private readonly kv: KV,
-    private readonly now: () => number = Date.now,
-  ) {}
-
-  /** The current session, or null if there is none or it has expired. */
-  get(): Session | null {
-    try {
-      const s = JSON.parse(this.kv.getItem(SESSION_KEY) ?? "null") as Session | null;
-      if (!s?.token || !s.user?.userId || !(Date.parse(s.expiresAt) > this.now() + 60_000)) return null;
-      return s;
-    } catch {
-      return null;
-    }
-  }
-
-  save(s: Session): void {
-    this.kv.setItem(SESSION_KEY, JSON.stringify(s));
-    this.kv.removeItem(SKIP_KEY);
-  }
-
-  clear(): void {
-    this.kv.removeItem(SESSION_KEY);
-  }
-
-  skipped(): boolean {
-    return this.kv.getItem(SKIP_KEY) === "1";
-  }
-
-  setSkipped(v: boolean): void {
-    if (v) this.kv.setItem(SKIP_KEY, "1");
-    else this.kv.removeItem(SKIP_KEY);
-  }
-}
-
-// ---------- form checks (the server checks again; these just give a quick, friendly answer) ----------
-
-export const MIN_PASSWORD = 10;
-
-export function checkSignUp(email: string, password: string, confirm: string): string | null {
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email.trim())) return "Enter a valid email address.";
-  if (password.length < MIN_PASSWORD) return `Use a password of at least ${MIN_PASSWORD} characters.`;
-  if (password !== confirm) return "The two passwords don't match.";
-  return null;
-}
+export const skippedSignIn = (kv: KV): boolean => kv.getItem(SKIP_KEY) === "1";
+export const setSkippedSignIn = (kv: KV, v: boolean): void => (v ? kv.setItem(SKIP_KEY, "1") : kv.removeItem(SKIP_KEY));
 
 /**
  * Keeps preferences in step with the service. Pushes are debounced (typing in the settings form should not send a
@@ -160,15 +99,16 @@ export class PrefsSync {
 
   constructor(
     private readonly api: AccountApi,
-    private readonly token: () => string | null,
+    private readonly token: () => Promise<string | null>,
     private readonly collect: () => SyncedPrefs,
     private readonly onError: (e: AccountError) => void = () => {},
     private readonly delayMs = 1500,
+    private readonly signedIn: () => boolean = () => true,
   ) {}
 
   /** On sign-in: returns what the service has, or pushes this device's preferences if the service has none yet. */
   async pull(): Promise<SyncedPrefs | null> {
-    const t = this.token();
+    const t = await this.token();
     if (!t) return null;
     const remote = await this.api.getPreferences(t);
     if (remote.version > 0) return remote.preferences;
@@ -177,7 +117,7 @@ export class PrefsSync {
   }
 
   schedule(): void {
-    if (!this.token()) return;
+    if (!this.signedIn()) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => void this.flush(), this.delayMs);
   }
@@ -185,7 +125,8 @@ export class PrefsSync {
   async flush(): Promise<void> {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    const t = this.token();
+    if (!this.signedIn()) return;
+    const t = await this.token();
     if (!t) return;
     try {
       await this.api.putPreferences(t, this.collect());

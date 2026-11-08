@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { AccountApi, AccountError, checkSignUp, PrefsSync, SessionStore, type Session } from "../src/account/account";
+import { AccountApi, AccountError, PrefsSync, setSkippedSignIn, skippedSignIn } from "../src/account/account";
+import { auth0Config, canRedirect, returnUrl } from "../src/account/auth0";
 import { memoryKV } from "../src/profile/profiles";
 
 interface Call {
@@ -18,77 +19,60 @@ function fakeFetch(handler: (c: Call) => Response) {
 }
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-const USER = { userId: "u_1", email: "a@example.com", name: "A", createdAt: "" };
-const session = (expiresAt: string): Session => ({ token: "tok", expiresAt, user: USER });
+const loc = (href: string) => new URL(href) as unknown as Location;
 
-describe("AccountApi", () => {
-  it("signs up with the password only in the body, never the url", async () => {
-    const { calls, f } = fakeFetch(() => json(session("2099-01-01T00:00:00Z"), 201));
-    const s = await new AccountApi(() => "http://127.0.0.1:8790/", f).signUp("a@example.com", "a long password", "A");
-    expect(s.user.userId).toBe("u_1");
-    expect(calls[0].url).toBe("http://127.0.0.1:8790/v1/auth/signup");
-    expect(calls[0].url).not.toContain("password");
-    expect(JSON.parse(calls[0].init.body as string)).toEqual({ email: "a@example.com", password: "a long password", name: "A" });
-    expect(calls[0].init.headers.Authorization).toBeUndefined();
+describe("auth0Config", () => {
+  it("needs all three settings and tidies a pasted domain", () => {
+    expect(auth0Config({})).toBeNull();
+    expect(auth0Config({ VITE_AUTH0_DOMAIN: "t.us.auth0.com", VITE_AUTH0_CLIENT_ID: "abc" })).toBeNull();
+    expect(auth0Config({ VITE_AUTH0_DOMAIN: " https://t.us.auth0.com/ ", VITE_AUTH0_CLIENT_ID: "abc", VITE_AUTH0_AUDIENCE: "https://api" })).toEqual({
+      domain: "t.us.auth0.com",
+      clientId: "abc",
+      audience: "https://api",
+    });
   });
 
-  it("sends the token for preferences", async () => {
-    const { calls, f } = fakeFetch(() => json({ preferences: {}, version: 0, updatedAt: null }));
-    await new AccountApi(() => "http://x", f).getPreferences("tok");
+  it("only redirects from a web page, back to the same page without its query", () => {
+    expect(canRedirect(loc("http://localhost:5173/"))).toBe(true);
+    expect(canRedirect(loc("file:///Applications/GazeType/index.html"))).toBe(false);
+    expect(returnUrl(loc("https://34-196-250-93.sslip.io/?code=x&state=y"))).toBe("https://34-196-250-93.sslip.io/");
+  });
+});
+
+describe("AccountApi", () => {
+  it("sends Auth0's token and never a user id", async () => {
+    const { calls, f } = fakeFetch(() => json({ user: { userId: "auth0|1", email: "a@example.com", name: "A", emailVerified: true } }));
+    const me = await new AccountApi(() => "http://127.0.0.1:8790/", f).me("tok");
+    expect(me.email).toBe("a@example.com");
+    expect(calls[0].url).toBe("http://127.0.0.1:8790/v1/me");
     expect(calls[0].init.headers.Authorization).toBe("Bearer tok");
+    expect(calls[0].init.headers["X-User-Id"]).toBeUndefined();
   });
 
   it("turns server errors into readable messages with the status", async () => {
-    const { f } = fakeFetch(() => json({ error: "email or password is wrong" }, 401));
-    const err = await new AccountApi(() => "http://x", f).signIn("a@example.com", "nope").catch((e) => e);
+    const { f } = fakeFetch(() => json({ error: "invalid or expired token" }, 401));
+    const err = await new AccountApi(() => "http://x", f).getPreferences("tok").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AccountError);
-    expect(err.status).toBe(401);
-    expect(err.message).toBe("Email or password is wrong.");
+    expect((err as AccountError).status).toBe(401);
+    expect((err as AccountError).message).toBe("Invalid or expired token.");
   });
 
   it("reports an unreachable service plainly", async () => {
     const f = (async () => {
       throw new TypeError("failed");
     }) as unknown as typeof fetch;
-    await expect(new AccountApi(() => "http://x", f).signIn("a@b.co", "x")).rejects.toThrow(/Could not reach/);
+    await expect(new AccountApi(() => "http://x", f).me("t")).rejects.toThrow(/Could not reach/);
   });
 });
 
-describe("SessionStore", () => {
-  it("keeps a session until shortly before it expires", () => {
-    let now = Date.parse("2026-11-07T12:00:00Z");
-    const store = new SessionStore(memoryKV(), () => now);
-    store.save(session("2026-11-08T12:00:00Z"));
-    expect(store.get()?.token).toBe("tok");
-    now = Date.parse("2026-11-08T11:59:30Z");
-    expect(store.get()).toBeNull(); // under a minute left: treat as signed out
-  });
-
-  it("ignores garbage and clears on sign-out", () => {
+describe("use without an account", () => {
+  it("is remembered until cleared", () => {
     const kv = memoryKV();
-    kv.setItem("gazetype.session.v1", "{not json");
-    const store = new SessionStore(kv);
-    expect(store.get()).toBeNull();
-    store.save(session("2099-01-01T00:00:00Z"));
-    store.clear();
-    expect(store.get()).toBeNull();
-  });
-
-  it("signing in forgets an earlier 'use without an account'", () => {
-    const store = new SessionStore(memoryKV());
-    store.setSkipped(true);
-    expect(store.skipped()).toBe(true);
-    store.save(session("2099-01-01T00:00:00Z"));
-    expect(store.skipped()).toBe(false);
-  });
-});
-
-describe("checkSignUp", () => {
-  it("catches the common mistakes before a round trip", () => {
-    expect(checkSignUp("nope", "a long password", "a long password")).toMatch(/email/);
-    expect(checkSignUp("a@example.com", "short", "short")).toMatch(/at least 10/);
-    expect(checkSignUp("a@example.com", "a long password", "a long passwerd")).toMatch(/match/);
-    expect(checkSignUp("a@example.com", "a long password", "a long password")).toBeNull();
+    expect(skippedSignIn(kv)).toBe(false);
+    setSkippedSignIn(kv, true);
+    expect(skippedSignIn(kv)).toBe(true);
+    setSkippedSignIn(kv, false);
+    expect(skippedSignIn(kv)).toBe(false);
   });
 });
 
@@ -96,32 +80,36 @@ describe("PrefsSync", () => {
   it("adopts the service's copy, or uploads this device's when the account has none", async () => {
     let remote = { preferences: {}, version: 0, updatedAt: null as string | null };
     const { calls, f } = fakeFetch((c) => {
-      if (c.init.method === "PUT") {
-        remote = { preferences: JSON.parse(c.init.body as string).preferences, version: remote.version + 1, updatedAt: "now" };
-        return json(remote);
-      }
+      if (c.init.method === "PUT") remote = { preferences: JSON.parse(c.init.body as string).preferences, version: remote.version + 1, updatedAt: "now" };
       return json(remote);
     });
-    const sync = new PrefsSync(new AccountApi(() => "http://x", f), () => "tok", () => ({ settings: { dwellMs: 900 } }));
+    const sync = new PrefsSync(new AccountApi(() => "http://x", f), async () => "tok", () => ({ settings: { dwellMs: 900 } }));
     expect(await sync.pull()).toBeNull(); // new account: ours were uploaded
     expect(JSON.parse(calls[1].init.body as string)).toEqual({ preferences: { settings: { dwellMs: 900 } }, version: 0 });
-    expect(await sync.pull()).toEqual({ settings: { dwellMs: 900 } }); // now the service has them
+    expect(await sync.pull()).toEqual({ settings: { dwellMs: 900 } });
   });
 
   it("debounces pushes and does nothing when signed out", async () => {
     vi.useFakeTimers();
     const { calls, f } = fakeFetch(() => json({ preferences: {}, version: 1, updatedAt: "" }));
-    let token: string | null = "tok";
-    const sync = new PrefsSync(new AccountApi(() => "http://x", f), () => token, () => ({}), undefined, 1000);
+    let signedIn = true;
+    const sync = new PrefsSync(new AccountApi(() => "http://x", f), async () => "tok", () => ({}), undefined, 1000, () => signedIn);
     sync.schedule();
     sync.schedule();
     sync.schedule();
     await vi.advanceTimersByTimeAsync(1100);
     expect(calls.filter((c) => c.init.method === "PUT")).toHaveLength(1);
-    token = null;
+    signedIn = false;
     sync.schedule();
     await vi.advanceTimersByTimeAsync(1100);
     expect(calls).toHaveLength(1);
     vi.useRealTimers();
+  });
+
+  it("reports a failed push", async () => {
+    const { f } = fakeFetch(() => json({ error: "invalid or expired token" }, 401));
+    const errors: number[] = [];
+    await new PrefsSync(new AccountApi(() => "http://x", f), async () => "tok", () => ({}), (e) => errors.push(e.status)).flush();
+    expect(errors).toEqual([401]);
   });
 });

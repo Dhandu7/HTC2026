@@ -8,13 +8,11 @@
   POST   /v1/me/voice/speak       {text, settings?} -> audio (AI-assisted)
   DELETE /v1/me/voice             delete at ElevenLabs, then here (502 + retried later if ElevenLabs fails)
 
-With accounts (AUTH_MODE=accounts, see accounts.py) also:
-  POST   /v1/auth/signup          {email, password, name?} -> 201 {token, expiresAt, user}
-  POST   /v1/auth/signin          {email, password} -> {token, expiresAt, user}
-  GET    /v1/me                   the signed-in account (never the password hash)
+With Auth0 sign-in (AUTH_MODE=auth0, see users.py) also:
+  GET    /v1/me                   the signed-in person's profile (email and name from Auth0)
   GET    /v1/me/preferences       {preferences, version, updatedAt}
   PUT    /v1/me/preferences       {preferences, version?} -> 409 if version is given and stale
-  GET    /.well-known/jwks.json   the public key that signs our tokens
+Sign-up, sign-in, passwords and resets are Auth0's; this service never sees a password.
 """
 
 from __future__ import annotations
@@ -31,8 +29,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from . import __version__
-from .accounts import AccountError, AccountLocked, AccountService, TokenIssuer
-from .auth import AuthError
+from .auth import AuthError, bearer_token
 from .elevenlabs import ElevenLabsError
 from .hosted import CONSENT_TEXT, CONSENT_VERSION, ClipsRejected, HostedError, HostedVoiceService
 from .records import RecordError
@@ -50,17 +47,6 @@ class PatchIn(BaseModel):
 class SpeakIn(BaseModel):
     text: str
     settings: Optional[dict] = None
-
-
-class SignUpIn(BaseModel):
-    email: str
-    password: str
-    name: Optional[str] = None
-
-
-class SignInIn(BaseModel):
-    email: str
-    password: str
 
 
 class PrefsIn(BaseModel):
@@ -95,9 +81,7 @@ def create_hosted_app(
     auth,
     cors_origins=(),
     speak_per_minute: int = 60,
-    accounts: Optional[AccountService] = None,
-    tokens: Optional[TokenIssuer] = None,
-    auth_per_minute: int = 20,
+    users=None,
 ) -> FastAPI:
     app = FastAPI(title="VocalEyes hosted voice", version=__version__, docs_url=None, redoc_url=None)
     limiter = RateLimiter(speak_per_minute)
@@ -132,13 +116,14 @@ def create_hosted_app(
     async def _eleven(_: Request, e: ElevenLabsError):
         return JSONResponse(status_code=e.status, content={"error": str(e)}, headers={"Retry-After": e.retry_after} if e.retry_after else {})
 
-    @app.exception_handler(AccountError)
-    async def _account(_: Request, e: AccountError):
-        headers = {"Retry-After": str(e.retry_after)} if isinstance(e, AccountLocked) else {}
-        return JSONResponse(status_code=e.status, content={"error": str(e)}, headers=headers)
+    if users is not None:
+        from .users import UserError
 
-    if accounts is not None and tokens is not None:
-        add_account_routes(app, accounts, tokens, user, RateLimiter(auth_per_minute))
+        @app.exception_handler(UserError)
+        async def _user(_: Request, e: UserError):
+            return JSONResponse(status_code=e.status, content={"error": str(e)})
+
+        add_user_routes(app, users, user)
 
     @app.get("/health")
     def health():
@@ -203,45 +188,21 @@ def create_hosted_app(
     return app
 
 
-def add_account_routes(app: FastAPI, accounts: AccountService, tokens: TokenIssuer, user, limiter: RateLimiter) -> None:
-    """Sign-up, sign-in and preferences. Passwords are only ever in the request body over HTTPS and are never logged."""
-
-    def throttle(request: Request) -> Optional[JSONResponse]:
-        # Per client address, in memory, per instance: slows password guessing across many accounts. The per-account
-        # lockout in AccountService is the durable limit; set throttling at the gateway as well.
-        ip = request.client.host if request.client else "unknown"
-        wait = limiter.check(f"auth:{ip}")
-        if wait is None:
-            return None
-        return JSONResponse(status_code=429, content={"error": "too many attempts, wait a minute"}, headers={"Retry-After": str(wait)})
-
-    def session(account) -> dict:
-        token, expires_at = tokens.issue(account.user_id)
-        return {"token": token, "expiresAt": expires_at, "user": account.public()}
-
-    @app.post("/v1/auth/signup", status_code=201)
-    def sign_up(body: SignUpIn, request: Request):
-        return throttle(request) or session(accounts.sign_up(body.email, body.password, body.name))
-
-    @app.post("/v1/auth/signin")
-    def sign_in(body: SignInIn, request: Request):
-        return throttle(request) or session(accounts.sign_in(body.email, body.password))
-
-    @app.get("/.well-known/jwks.json")
-    def jwks():
-        return tokens.jwks()
+def add_user_routes(app: FastAPI, users, user) -> None:
+    """Profile and preferences for the signed-in person (the token's sub). See users.py."""
 
     @app.get("/v1/me")
-    def me(uid: str = Depends(user)):
+    def me(request: Request, uid: str = Depends(user)):
         try:
-            return {"user": accounts.get(uid).public()}
-        except AccountError:
-            raise AuthError("invalid or expired token")  # a dev login, or an account that no longer exists
+            token = bearer_token(request)
+        except AuthError:
+            token = None  # the dev login on a laptop: no Auth0 profile to fetch
+        return {"user": users.me(uid, token).public()}
 
     @app.get("/v1/me/preferences")
     def get_prefs(uid: str = Depends(user)):
-        return accounts.get_prefs(uid).public()
+        return users.get_prefs(uid).public()
 
     @app.put("/v1/me/preferences")
     def put_prefs(body: PrefsIn, uid: str = Depends(user)):
-        return accounts.put_prefs(uid, body.preferences, body.version).public()
+        return users.put_prefs(uid, body.preferences, body.version).public()
