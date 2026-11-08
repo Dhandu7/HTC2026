@@ -5,6 +5,11 @@ import { GazeEngine, type GazePoint } from "./gaze/engine";
 import { estimateDistanceCm, type ErrorStats, type ViewingGeometry } from "./gaze/accuracy";
 import { runCalibration, runRecenter } from "./ui/calibration";
 import { BlinkBurstDetector } from "./input/gestures";
+import { POINTER_FEATURE_NAMES, pointerVector } from "./gaze/features";
+import { download, recordSession } from "./record/recorder";
+import { SessionTape } from "./record/tape";
+import { runTargetTest } from "./record/targetTest";
+import type { SessionMeta } from "./record/format";
 import { SessionRecorder } from "./metrics/recorder";
 import { BlinkSelector, DwellSelector, TargetTracker, type Rect, type SelectionMode } from "./input/selection";
 import { PredictionEngine } from "./predict/engine";
@@ -25,8 +30,6 @@ import { Auth0Session, auth0Config, canRedirect, type SignedInUser } from "./acc
 import { mountAuthScreen } from "./ui/authScreen";
 import { mountMyVoice } from "./ui/myVoice";
 import { startVoiceCommands } from "./input/voice";
-import { recordSession } from "./record/recorder";
-import type { SessionMeta } from "./record/format";
 
 // ---------- Electron bridge (absent in the browser) ----------
 interface Bridge {
@@ -53,6 +56,9 @@ interface Settings {
   voice: boolean;
   /** Three quick blinks re-center a drifting pointer. */
   blinkRecenter: boolean;
+  /** Download every calibration as a replayable file (raw landmarks; npm run replay). */
+  saveCalibrations: boolean;
+  participant: string;
 }
 const DEFAULTS: Settings = {
   selectionMode: "dwell",
@@ -66,6 +72,8 @@ const DEFAULTS: Settings = {
   hotCorner: true,
   blinkRecenter: true,
   voice: false,
+  saveCalibrations: true,
+  participant: "",
 };
 const load = <T>(k: string, d: T): T => {
   try {
@@ -110,17 +118,13 @@ function showToast(html: string, ms = 4000) {
 // ---------- core objects ----------
 const gaze = new GazeEngine();
 const rec = new SessionRecorder();
-const EYE_FEATURES = ["irisX", "irisY", "lookH", "lookV", "yaw", "pitch", "openness"];
-const HEAD_FEATURES = ["yaw", "pitch", "noseX", "noseY", "noseRelX", "noseRelY", "roll", "faceH", "eyeMidX", "eyeMidY"];
-rec.featureNames = EYE_FEATURES;
+const POINTER_FEATURES = POINTER_FEATURE_NAMES;
+rec.featureNames = POINTER_FEATURES;
 const tracker = new FaceTracker($("#video"));
-// Nose pointer: the same keyboard, fed head features instead of eye features. Eye features are ignored in this mode.
-let nosePointer = false;
+// The pointer gets the 10 pointer features (see POINTER_FLOOR in engine.ts).
 tracker.onFrame = (f) => {
   if (!f) return gaze.handleFrame(f);
-  const v = f.vector;
-  // Eye mode keeps its original 7 features; nose mode gets 10 head features (see NOSE_FLOOR in engine.ts).
-  gaze.handleFrame({ ...f, vector: nosePointer ? [v[4], v[5], v[7], v[8], v[11], v[12], v[10], v[9], v[13], v[14]] : v.slice(0, 7) });
+  gaze.handleFrame({ ...f, vector: pointerVector(f.vector) });
 };
 const profiles = new ProfileManager(localStorage);
 const predictor = new PredictionEngine(profiles.store(profiles.active.id));
@@ -167,11 +171,12 @@ function render() {
   output.innerHTML = kb.displayHtml();
   rectsDirty = true;
   document.body.dataset.kb = kb.name;
-  $("#kb-toggle").textContent = kb === gazeKb ? "Keyboard: GazeType" : "Keyboard: Baseline QWERTY";
+  $("#kb-toggle").textContent = kb === gazeKb ? "Keyboard: VocalEyes" : "Keyboard: Baseline QWERTY";
 }
 function measure() {
   if (!rectsDirty) return;
-  rects = [...board.querySelectorAll<HTMLElement>("[data-target]")].map((el) => {
+  // The board's keys plus the one-step Clear key in the top bar.
+  rects = [...document.querySelectorAll<HTMLElement>("#board [data-target], #clear-btn")].map((el) => {
     const r = el.getBoundingClientRect();
     return { id: el.dataset.target!, left: r.left, top: r.top, right: r.right, bottom: r.bottom };
   });
@@ -198,30 +203,6 @@ function updateStatus() {
 }
 setInterval(updateStatus, 500);
 
-// ---------- head position ----------
-// Webcam gaze is calibrated for one head position. If the head has been somewhere else for
-// over a second, say how to get back; hide again once it's been back for half a second.
-const headHint = $("#head-hint");
-let headBadSince: number | null = null;
-let headOkSince: number | null = null;
-setInterval(() => {
-  const active = expanded && home.hidden && calRoot.hidden;
-  const hc = active ? gaze.headCheck() : null;
-  const now = performance.now();
-  if (!hc || hc.ok) {
-    headBadSince = null;
-    headOkSince ??= now;
-    if (!hc || now - headOkSince > 500) headHint.hidden = true;
-    return;
-  }
-  headOkSince = null;
-  headBadSince ??= now;
-  if (now - headBadSince > 1000) {
-    headHint.textContent = `${hc.advice}: back to where you were when calibrating`;
-    headHint.hidden = false;
-  }
-}, 250);
-
 // ---------- selection ----------
 let pendingImplicit: { timer: number } | null = null;
 
@@ -243,9 +224,14 @@ function acceptSentenceSamples() {
   sentenceSamples = [];
 }
 
+/** Find a gaze target: the top-bar Clear key or a key on the board. */
+const targetEl = (id: string) =>
+  id === "top:clear" ? $<HTMLElement>("#clear-btn") : board.querySelector<HTMLElement>(`[data-target="${CSS.escape(id)}"]`);
+
 function applySelection(id: string, t: number) {
-  const el = board.querySelector<HTMLElement>(`[data-target="${CSS.escape(id)}"]`);
-  const kind = kb.select(id);
+  const el = targetEl(id);
+  // Top-bar Clear = the keyboard's own clear action (VocalEyes keyboard clears and resets; baseline goes via doAction).
+  const kind = kb.select(id === "top:clear" ? "act:clear" : id);
   rec.event("select", { id, kind });
   if (kind === "delete" && pendingImplicit) {
     clearTimeout(pendingImplicit.timer);
@@ -319,7 +305,7 @@ function onGaze(g: GazePoint) {
     dwell.dwellMs = kb === gazeKb ? settings.dwellMs : settings.baselineDwellMs;
     out = dwell.update(g.t, target);
   }
-  const el = out.target ? board.querySelector<HTMLElement>(`[data-target="${CSS.escape(out.target)}"]`) : null;
+  const el = out.target ? targetEl(out.target) : null;
   if (lastHover && lastHover !== el) {
     lastHover.classList.remove("hover");
     lastHover.style.removeProperty("--p");
@@ -506,6 +492,10 @@ async function doAction(a: string) {
     return;
   }
   switch (a) {
+    case "clear":
+      kb.clear();
+      render();
+      break;
     case "speak":
       speak(text);
       if (text) acceptSentenceSamples();
@@ -563,22 +553,55 @@ async function calibrate() {
     showToast("Calibration needs the camera. You're in mouse mode.");
     return;
   }
+  const tape = settings.saveCalibrations ? new SessionTape(gaze) : null;
   const stats = await runCalibration(
     gaze,
     calRoot,
     geometry,
-    nosePointer ? "Point your nose at each dot by turning your head. Keep going until it disappears." : undefined,
+    "Look at each dot until it disappears.",
+    tape ?? undefined,
   );
+  tape?.stop();
+  if (stats && tape) {
+    // Save the calibration as a replayable session (raw frames + dots) for offline evaluation.
+    const g = geometry();
+    const id = (settings.participant || "anon").replace(/[^\w-]+/g, "_");
+    const session = tape.toSession(
+      {
+        participant: settings.participant || "anon",
+        pointer: "pointer",
+        glasses: false,
+        lighting: "",
+        notes: `app calibration, pointer, hit6 ${Math.round(stats.hit6 * 100)}%, hit16 ${Math.round(stats.hit16 * 100)}%`,
+        mode: "calibration",
+        distanceCm: settings.distanceCm,
+        screenDiagonalIn: g.screenDiagonalIn,
+        hfovDeg: settings.hfovDeg,
+      },
+      tracker,
+    );
+    download(new Blob([JSON.stringify(session)], { type: "application/json" }), `gazecal-pointer-${id}-${session.createdAt.replace(/[:.]/g, "-")}.json`);
+  }
   if (!stats) {
     showToast("Calibration cancelled or failed.");
     return;
   }
   lastError = stats;
-  rec.event("calibrated", { model: nosePointer ? "head" : "eye", error: stats, samples: gaze.calibrationSamples.length });
+  rec.event("calibrated", { model: "pointer", error: stats, samples: gaze.calibrationSamples.length });
   const g = geometry();
+  // Face lost during the check: the numbers below would be fake, so say so instead.
+  if (stats.lostCheckDots * 2 >= stats.checkDots) {
+    showToast(
+      `<b style="color:#ff7b72">⚠ Face not found during the accuracy check</b> (${stats.lostCheckDots} of ${stats.checkDots} check dots). The calibration may be fine, but it couldn't be measured. Stay in view of the camera and press <b>◎ Calibrate</b> again.`,
+      15000,
+    );
+    return;
+  }
   const weakDir = !(stats.dirX > 0.7 && stats.dirY > 0.7);
   showToast(
-    `${weakDir ? `<b style="color:#ff7b72">⚠ Direction check failed</b> (pointer follows your target with correlation x ${stats.dirX.toFixed(2)}, y ${stats.dirY.toFixed(2)}; it should be above 0.7). This calibration may move the pointer the wrong way. Press ◎ Calibrate again.<br>` : ""}<b>Calibrated.</b> Mean error <b>${stats.meanDeg.toFixed(2)}°</b> (${stats.meanPx.toFixed(0)} px), precision ±${stats.precisionDeg.toFixed(
+    `${weakDir ? `<b style="color:#ff7b72">⚠ Direction check failed</b> (pointer follows your target with correlation x ${stats.dirX.toFixed(2)}, y ${stats.dirY.toFixed(2)}; it should be above 0.7). This calibration may move the pointer the wrong way. Press ◎ Calibrate again.<br>` : ""}<b>Calibrated.</b> Hit rate on check dots: <b>${Math.round(
+      stats.hit6 * 100,
+    )}%</b> for 6 large buttons, <b>${Math.round(stats.hit16 * 100)}%</b> for a 4×4 grid.<br>Mean error <b>${stats.meanDeg.toFixed(2)}°</b> (${stats.meanPx.toFixed(0)} px), precision ±${stats.precisionDeg.toFixed(
       2,
     )}°, n=${stats.n}.<br><small>Assumes ${settings.screenDiagonalIn}" screen at ${g.distanceCm.toFixed(0)} cm${
       settings.distanceCm ? "" : " (estimated from iris size)"
@@ -589,18 +612,15 @@ async function calibrate() {
 }
 
 // ---------- start ----------
-async function startCamera(nose = false) {
+async function startCamera() {
   home.querySelector<HTMLElement>(".home-msg")!.textContent = "Loading face model…";
   try {
-    nosePointer = nose;
-    if (nose) gaze.configureNose();
-    rec.featureNames = nose ? HEAD_FEATURES : EYE_FEATURES;
-    rec.event("start", { model: nose ? "head" : "eye" });
+    rec.event("start", { model: "pointer" });
     const where = await tracker.init();
     await tracker.start();
     gaze.source = "camera";
     home.hidden = true;
-    showToast(`${nose ? "Head tracker" : "Eye tracker"} on (${where}). Video stays on this device.`);
+    showToast(`Pointer tracker on (${where}). Video stays on this device.`);
     await calibrate();
   } catch (err) {
     home.querySelector<HTMLElement>(".home-msg")!.textContent = `Camera failed: ${(err as Error).message}. Try mouse mode.`;
@@ -613,7 +633,7 @@ function startMouse() {
   showToast("Mouse mode: hover to dwell-select, or click. Same UI and metrics as gaze.");
 }
 
-$("#start-nose").addEventListener("click", () => void startCamera(true));
+$("#start-pointer").addEventListener("click", () => void startCamera());
 $("#start-mouse").addEventListener("click", startMouse);
 $("#kb-toggle").addEventListener("click", () => {
   kb = kb === gazeKb ? baseKb : gazeKb;
@@ -623,9 +643,10 @@ $("#kb-toggle").addEventListener("click", () => {
   render();
 });
 $("#recal").addEventListener("click", () => void calibrate());
+$("#clear-btn").addEventListener("click", () => applySelection("top:clear", performance.now()));
 $("#record-btn").addEventListener("click", openRecord);
 
-// ---------- session recording (offline evaluation) ----------
+// ---------- session recording (offline evaluation: npm run replay) ----------
 function openRecord() {
   if (gaze.source !== "camera") {
     showToast("Recording needs the camera. You're in mouse mode.");
@@ -633,13 +654,18 @@ function openRecord() {
   }
   const dlg = $<HTMLDialogElement>("#record");
   const form = dlg.querySelector("form")!;
+  const pid = form.elements.namedItem("participant") as HTMLInputElement;
+  if (!pid.value) pid.value = settings.participant;
+  dlg.querySelector<HTMLElement>(".record-mode")!.textContent = "Pointer tracker: look at each dot until it disappears.";
   dlg.onclose = async () => {
     if (dlg.returnValue !== "ok") return;
     const fd = new FormData(form);
     const g = geometry();
+    const mode = fd.get("mode");
     const meta: SessionMeta = {
       participant: String(fd.get("participant") ?? "").trim(),
-      mode: fd.get("mode") === "short" ? "short" : "full",
+      pointer: "pointer",
+      mode: mode === "short" ? "short" : mode === "full" ? "full" : mode === "target" ? "target" : "quick",
       glasses: fd.get("glasses") === "on",
       lighting: String(fd.get("lighting") ?? ""),
       notes: String(fd.get("notes") ?? ""),
@@ -647,10 +673,24 @@ function openRecord() {
       screenDiagonalIn: g.screenDiagonalIn,
       hfovDeg: settings.hfovDeg,
     };
+    if (meta.mode === "target") {
+      // Closed loop: needs a calibration, then the user steers the visible pointer onto each button.
+      if (!gaze.calibrated) return showToast("Calibrate first, then run the Target test.");
+      const s = await runTargetTest(gaze, tracker, calRoot, { meta, dwellMs: settings.dwellMs });
+      if (!s) return showToast("Target test cancelled; nothing saved.");
+      const id = (meta.participant || "anon").replace(/[^\w-]+/g, "_");
+      download(new Blob([JSON.stringify(s)], { type: "application/json" }), `gazetarget-${meta.pointer}-${id}-${s.createdAt.replace(/[:.]/g, "-")}.json`);
+      const trials = s.targetTest!.trials;
+      const by = (layout: string) => {
+        const t = trials.filter((x) => x.layout.startsWith(layout));
+        return t.length ? `${Math.round((t.filter((x) => x.outcome === "correct").length / t.length) * 100)}% right, ${t.filter((x) => x.outcome === "wrong").length} wrong` : "–";
+      };
+      return showToast(`<b>Target test saved.</b> 6 buttons: ${by("6")} · 4×4 grid: ${by("16")}. Move it to VisualEyes/recordings/ and run npm run replay.`, 12000);
+    }
     const n = await recordSession(gaze, tracker, calRoot, { meta, video: fd.get("video") === "on" });
     showToast(
       n === null
-        ? "Recording cancelled before validation finished; nothing saved."
+        ? "Recording cancelled before the check dots finished; nothing saved."
         : `Saved session (${n} frames) to your Downloads. Move it to VisualEyes/recordings/ and run <code>npm run replay -- recordings/*.json</code>.`,
       9000,
     );
@@ -659,7 +699,7 @@ function openRecord() {
 }
 $("#export-data").addEventListener("click", () => {
   const data = rec.toJSON({
-    model: nosePointer ? "head" : "eye",
+    model: "pointer",
     featureNames: rec.featureNames,
     settings,
     lastError,
@@ -672,10 +712,10 @@ $("#export-data").addEventListener("click", () => {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   showToast(`Exported ${rec.frameCount} frames + events. Numbers only, no video.`);
 });
-// Import a nose-pointer calibration made in the other build. Accepts either that app's "Export data" JSON
+// Import a pointer-tracker calibration made in the other build. Accepts either that app's "Export data" JSON
 // ({calibration: [{f, x, y}], window}) or its saved calibration object ({samples: [{features, x, y}], w, h}).
 $("#import-cal").addEventListener("click", () => {
-  if (gaze.source !== "camera" || !nosePointer) return showToast("Start the head tracker first, then import.");
+  if (gaze.source !== "camera") return showToast("Start the pointer tracker first, then import.");
   $<HTMLInputElement>("#import-file").click();
 });
 $<HTMLInputElement>("#import-file").addEventListener("change", async (e) => {
@@ -688,8 +728,8 @@ $<HTMLInputElement>("#import-file").addEventListener("change", async (e) => {
     const raw: { f: number[]; x: number; y: number }[] = (d.calibration ?? d.samples ?? []).map((s: { f?: number[]; features?: number[]; x: number; y: number }) => ({ f: s.f ?? s.features ?? [], x: s.x, y: s.y }));
     const srcW: number = d.window?.w ?? d.w ?? innerWidth;
     const srcH: number = d.window?.h ?? d.h ?? innerHeight;
-    if (d.model && d.model !== "head") return showToast(`That file is from the "${d.model}" model, not the head tracker.`);
-    if (raw.length < 30 || raw.some((s) => s.f.length !== 10)) return showToast("Not a nose-pointer calibration (expected 10 head features per sample).");
+    if (d.model && d.model !== "pointer") return showToast(`That file is from the "${d.model}" model, not the pointer tracker.`);
+    if (raw.length < 30 || raw.some((s) => s.f.length !== 10)) return showToast("Not a pointer-tracker calibration (expected 10 pointer features per sample).");
     // Samples are in screen pixels; rescale if the window size differs from when they were recorded.
     const sx = innerWidth / srcW;
     const sy = innerHeight / srcH;
@@ -716,10 +756,11 @@ const runs = (): RunResult[] => {
 function startRun(index: number) {
   const target = BENCHMARK_SENTENCES[index % BENCHMARK_SENTENCES.length];
   benchmark = { index, target };
+  gazeKb.useHome = false;
   kb.clear();
   session = new TypingSession(kb.name, gaze.source === "mouse" ? `${settings.selectionMode}+mouse` : settings.selectionMode, target);
   targetBar.hidden = false;
-  targetBar.innerHTML = `Type: <b>${target}</b> <small>(timer starts on first selection · ${kb === gazeKb ? "GazeType" : "Baseline"})</small> <button id="next-sentence" type="button">⏭ Next sentence</button>`;
+  targetBar.innerHTML = `Type: <b>${target}</b> <small>(timer starts on first selection · ${kb === gazeKb ? "VocalEyes" : "Baseline"})</small> <button id="next-sentence" type="button">⏭ Next sentence</button>`;
   $("#next-sentence").addEventListener("click", () => startRun(++benchIndex));
   blink.accepted = blink.rejectedShort = blink.rejectedLong = 0;
   render();
@@ -742,6 +783,7 @@ function finishRun(t: number) {
     8000,
   );
   benchmark = null;
+  gazeKb.useHome = true;
   targetBar.hidden = true;
   kb.clear();
   render();

@@ -44,7 +44,7 @@ export function irisInEye(
 }
 
 /** Yaw/pitch/roll (radians) from MediaPipe's column-major 4x4 facial transformation matrix. */
-export function headPose(m: ArrayLike<number> | undefined): { yaw: number; pitch: number; roll: number } {
+export function facePose(m: ArrayLike<number> | undefined): { yaw: number; pitch: number; roll: number } {
   if (!m || m.length < 16) return { yaw: 0, pitch: 0, roll: 0 };
   return {
     yaw: Math.asin(Math.max(-1, Math.min(1, -m[2]))),
@@ -53,21 +53,30 @@ export function headPose(m: ArrayLike<number> | undefined): { yaw: number; pitch
   };
 }
 
-/** Minimum std per feature (same order as `vector`), so near-constant head features can't get huge weights. */
+/** Minimum std per feature (same order as `vector`), so near-constant position features can't get huge weights. */
 export const STD_FLOOR = [0, 0, 0, 0, 0.04, 0.04, 0, 0.03, 0.03, 0.03];
 
 export interface GazeFeatures {
-  /** Vector fed to the regressor. The first 4 entries are the gaze-direction terms. Length 15; eye modes use the first 10. */
+  /** Full feature vector (length 15, layout kept for recordings). Entries 0–3 and 6 are eye features the pointer ignores; pointerVector() picks the pointer inputs. */
   vector: number[];
   blinkL: number;
   blinkR: number;
   /** Mean eyeLookDown blendshape (0..1), for diagnostics. */
   lookDown: number;
-  /** Nose x/y and face height (frame fractions) — for head-movement warnings, not regression. */
-  headPos: number[];
+  /** Face x/y and face height (frame fractions) — for seating-position warnings, not regression. */
+  facePos: number[];
   /** Mean iris diameter as a fraction of frame width (for distance estimation). */
   irisDiameter: number;
 }
+
+/**
+ * Pointer-tracker inputs, picked from the 15-entry `vector`: yaw, pitch, tipX, tipY, tipRelX,
+ * tipRelY, roll, faceH, eyeMidX, eyeMidY. Shared by the app and the offline replay so both
+ * feed the pointer model exactly the same thing.
+ */
+export const POINTER_INDEX = [4, 5, 7, 8, 11, 12, 10, 9, 13, 14] as const;
+export const POINTER_FEATURE_NAMES = ["yaw", "pitch", "tipX", "tipY", "tipRelX", "tipRelY", "roll", "faceH", "eyeMidX", "eyeMidY"];
+export const pointerVector = (v: number[]) => POINTER_INDEX.map((i) => v[i]);
 
 export function extractFeatures(
   lm: Pt[],
@@ -77,7 +86,7 @@ export function extractFeatures(
 ): GazeFeatures {
   const L = irisInEye(lm, LM.leftEye, frameAspect);
   const R = irisInEye(lm, LM.rightEye, frameAspect);
-  const pose = headPose(matrix);
+  const pose = facePose(matrix);
   const g = (k: string) => blend[k] ?? 0;
   // Horizontal: toward the subject's left is +; vertical: up is +.
   const lookH = (g("eyeLookOutLeft") - g("eyeLookInLeft") + g("eyeLookInRight") - g("eyeLookOutRight")) / 2;
@@ -85,8 +94,8 @@ export function extractFeatures(
   // The inner-corner direction is opposite for the two eyes, so mirror the right eye's x.
   const irisX = (L.x + (1 - R.x)) / 2;
   const irisY = (L.y - R.y) / 2;
-  const nose = lm[LM.noseTip];
-  // Extra head geometry (used by head-pointer mode): where the nose sits relative to the eyes, and the eye midpoint.
+  const tip = lm[LM.noseTip];
+  // Extra face geometry (used by pointer-tracker mode): where the face centre sits relative to the eyes, and the eye midpoint.
   const eyeMidX = (lm[LM.leftEye.outer].x + lm[LM.rightEye.outer].x) / 2;
   const eyeMidY = (lm[LM.leftEye.outer].y + lm[LM.rightEye.outer].y) / 2;
   const eyeDist = Math.hypot((lm[LM.rightEye.outer].x - lm[LM.leftEye.outer].x) * frameAspect, lm[LM.rightEye.outer].y - lm[LM.leftEye.outer].y) || 1e-6;
@@ -97,14 +106,14 @@ export function extractFeatures(
     2;
   const irisDiameter = (ringDiam(LM.leftEye.irisRing) + ringDiam(LM.rightEye.irisRing)) / 2 / frameAspect;
   return {
-    // Head translation/scale (nose x, nose y, face height as frame fractions) ARE regressor inputs, as the
+    // Face translation/scale (face x, face y, face height as frame fractions) ARE regressor inputs, as the
     // last 3 entries. They barely vary during the dot calibration, so z-scoring alone gave them huge weights
-    // (a 10.6 deg first run). Two guards: the regressor floors their std (see HEAD_STD_FLOOR), and calibration
-    // adds a "look at a fixed dot while moving your head" phase so the model actually sees head movement.
-    vector: [irisX, irisY, lookH, lookV, pose.yaw, pose.pitch, (L.openness + R.openness) / 2, nose.x, nose.y, faceH,
-      // Indices 10..14: roll, nose-vs-eyes geometry (x, y), eye midpoint (x, y). Only head-pointer mode uses these.
-      pose.roll, ((nose.x - eyeMidX) * frameAspect) / eyeDist, (nose.y - eyeMidY) / eyeDist, eyeMidX, eyeMidY],
-    headPos: [nose.x, nose.y, faceH],
+    // (a 10.6 deg first run). Two guards: the regressor floors their std (see POS_STD_FLOOR), and calibration
+    // adds a "look at a fixed dot while moving" phase so the model actually sees that movement.
+    vector: [irisX, irisY, lookH, lookV, pose.yaw, pose.pitch, (L.openness + R.openness) / 2, tip.x, tip.y, faceH,
+      // Indices 10..14: roll, centre-vs-eyes geometry (x, y), eye midpoint (x, y). Only pointer-tracker mode uses these.
+      pose.roll, ((tip.x - eyeMidX) * frameAspect) / eyeDist, (tip.y - eyeMidY) / eyeDist, eyeMidX, eyeMidY],
+    facePos: [tip.x, tip.y, faceH],
     // Looking down lowers the eyelids, which raises the raw blink score without a blink. Subtract the
     // look-down part so downward gaze isn't mistaken for a blink (that froze the cursor on the bottom row).
     blinkL: Math.max(0, g("eyeBlinkLeft") - 0.6 * g("eyeLookDownLeft")),

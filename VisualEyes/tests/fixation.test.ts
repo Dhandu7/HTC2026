@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkHead, cleanFixation, scatteredDots } from "../src/gaze/fixation";
+import { cleanFixation, scatteredDots } from "../src/gaze/fixation";
 
 // Deterministic small jitter around a point.
 const steadyFrames = (n: number, c: number[], jitter = 0.002) =>
@@ -29,25 +29,5 @@ describe("cleanFixation", () => {
   });
   it("flags too few frames (face lost, eyes closed)", () => {
     expect(cleanFixation(steadyFrames(4, [0.5, 0.1, 0.2, -0.1])).steady).toBe(false);
-  });
-});
-
-describe("checkHead", () => {
-  const ref: [number, number, number] = [0.5, 0.45, 0.4];
-  it("is fine near the calibration position", () => {
-    expect(checkHead(ref, [0.52, 0.47, 0.42]).ok).toBe(true);
-  });
-  it("asks the user to move back, or closer", () => {
-    expect(checkHead(ref, [0.5, 0.45, 0.5]).advice).toBe("Move back a little");
-    expect(checkHead(ref, [0.5, 0.45, 0.3]).advice).toBe("Move a little closer");
-  });
-  it("gives sideways directions in the user's own left/right", () => {
-    // Moving to their left shows up as a larger x in the (unmirrored) camera image.
-    expect(checkHead(ref, [0.62, 0.45, 0.4]).advice).toBe("Move a little to your right");
-    expect(checkHead(ref, [0.38, 0.45, 0.4]).advice).toBe("Move a little to your left");
-  });
-  it("asks to raise or lower the head", () => {
-    expect(checkHead(ref, [0.5, 0.56, 0.4]).advice).toBe("Raise your head a little");
-    expect(checkHead(ref, [0.5, 0.34, 0.4]).advice).toBe("Lower your head a little");
   });
 });

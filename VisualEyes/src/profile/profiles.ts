@@ -151,7 +151,7 @@ export class ProfileManager {
   /** Import an exported profile as a new profile (never overwrites an existing one). */
   importProfile(json: string): Profile {
     const parsed = JSON.parse(json) as { format?: string; profile?: Profile; data?: Record<string, string> };
-    if (parsed.format !== "gazetype-profile" || !parsed.profile) throw new Error("Not a GazeType profile file");
+    if (parsed.format !== "gazetype-profile" || !parsed.profile) throw new Error("Not a VocalEyes profile file");
     const p: Profile = { ...blank(parsed.profile.name), ...parsed.profile, id: newId() };
     for (const [k, v] of Object.entries(parsed.data ?? {})) if (typeof v === "string") this.kv.setItem(prefix(p.id) + k, v);
     this.idx.profiles.push(p);
