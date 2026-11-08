@@ -48,7 +48,7 @@ def test_every_dynamodb_action_the_code_uses_is_in_the_policy():
     import re
 
     pkg = Path(__file__).resolve().parent.parent / "voice_sidecar"
-    src = (pkg / "records.py").read_text() + (pkg / "accounts.py").read_text()
+    src = (pkg / "records.py").read_text() + (pkg / "users.py").read_text()
     used = set(re.findall(r"client\.(get_item|put_item|update_item|delete_item|query|scan|transact_write_items)\(", src))
     needs = {"get_item": "dynamodb:GetItem", "query": "dynamodb:Query", "update_item": "dynamodb:UpdateItem", "put_item": "dynamodb:PutItem", "delete_item": "dynamodb:DeleteItem", "scan": "dynamodb:Scan"}
     pol = json.loads((INFRA / "iam-policy.example.json").read_text())

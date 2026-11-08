@@ -141,7 +141,7 @@ def test_local_serves_with_the_key_from_the_env_file_and_safe_local_defaults(box
     echo.write_text('#!/bin/sh\nprintf "%s|%s|%s|%s" "$ELEVENLABS_API_KEY" "$VOICE_STORE" "$AUTH_MODE" "$CORS_ORIGINS"\n')
     r = run(box, "local", env_file_text="ELEVENLABS_API_KEY=sk_test_LOCAL\n")
     assert r.returncode == 0
-    assert r.stdout.splitlines()[-1] == "sk_test_LOCAL|memory|accounts|http://localhost:5173,http://127.0.0.1:5173"
+    assert r.stdout.splitlines()[-1] == "sk_test_LOCAL|memory|dev|http://localhost:5173,http://127.0.0.1:5173"
     assert "SECRET" not in r.stdout + r.stderr
 
 

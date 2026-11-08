@@ -12,7 +12,6 @@
 #   ./hosted.sh serve     run the API (reads configuration from the environment, see README)
 #   ./hosted.sh reconcile retry stuck deletes and release stale reservations (schedule this in AWS)
 #   ./hosted.sh config    show the effective configuration, never a secret value
-#   ./hosted.sh signing-key-create  make the RSA key that signs sign-in tokens and store it in Secrets Manager (once per environment)
 #   ./hosted.sh smoke ... live ElevenLabs check with YOUR key: see scripts/elevenlabs_smoke.py
 set -euo pipefail
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"   # absolute, because we cd below and $0 may be relative
@@ -90,14 +89,19 @@ case "${1:-}" in
   test)  shift; exec "$PY" -m pytest -q tests_hosted "$@" ;;
   local)
     # The one command a teammate needs: first run installs Python 3.12 deps, then serves the API for the app on
-    # this machine only (127.0.0.1, in memory, accounts with a throwaway signing key, plus the dev test login). Anything you set yourself still wins.
+    # this machine only (127.0.0.1, in memory, Auth0 sign-in if configured, plus the dev test login). Anything you set yourself still wins.
     shift
     [ -x "$PY" ] || bash "$SELF" setup
     # Non-secret settings may also come from VisualEyes/.env, so `npm run voice` can use the real DynamoDB table.
-    for v in VOICE_STORE VOICE_TABLE_NAME AWS_REGION ACCOUNTS_SIGNING_KEY_SECRET_ID; do
+    for v in VOICE_STORE VOICE_TABLE_NAME AWS_REGION AUTH0_DOMAIN AUTH0_AUDIENCE; do
       if [ -z "${!v:-}" ]; then val="$(env_value "$v")"; [ -z "$val" ] || export "$v=$val"; fi
     done
-    export VOICE_STORE="${VOICE_STORE:-memory}" AUTH_MODE="${AUTH_MODE:-accounts}"   # sign-in works; the dev login still does too (loopback only)
+    # The app's own Auth0 settings (VITE_AUTH0_*) are the same tenant and API, so the service can reuse them.
+    [ -n "${AUTH0_DOMAIN:-}" ] || { val="$(env_value VITE_AUTH0_DOMAIN)"; [ -z "$val" ] || export AUTH0_DOMAIN="$val"; }
+    [ -n "${AUTH0_AUDIENCE:-}" ] || { val="$(env_value VITE_AUTH0_AUDIENCE)"; [ -z "$val" ] || export AUTH0_AUDIENCE="$val"; }
+    # Auth0 sign-in when it is configured (the dev test login still works on this machine), else the dev login alone.
+    if [ -n "${AUTH0_DOMAIN:-}" ] && [ -n "${AUTH0_AUDIENCE:-}" ]; then DEFAULT_AUTH=auth0; else DEFAULT_AUTH=dev; fi
+    export VOICE_STORE="${VOICE_STORE:-memory}" AUTH_MODE="${AUTH_MODE:-$DEFAULT_AUTH}"
     export CORS_ORIGINS="${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}"
     load_key
     if [ -z "${ELEVENLABS_API_KEY:-}" ] && [ -z "${ELEVENLABS_SECRET_ID:-}" ]; then
@@ -113,14 +117,6 @@ case "${1:-}" in
   serve) shift; load_key; exec "$PY" -m voice_sidecar.hosted_main serve "$@" ;;
   reconcile) shift; load_key; exec "$PY" -m voice_sidecar.hosted_main reconcile "$@" ;;
   config) shift; load_key; exec "$PY" -m voice_sidecar.hosted_main check-config "$@" ;;
-  signing-key-create)
-    # The key is generated here and piped straight to Secrets Manager: never written to disk, a variable or the screen.
-    shift
-    SECRET="${ACCOUNTS_SIGNING_KEY_SECRET_ID:-vocaleyes/accounts-signing-key}"
-    command -v aws >/dev/null || { echo "needs the AWS CLI, signed in to the account the service runs in" >&2; exit 2; }
-    "$PY" -c 'import json; from cryptography.hazmat.primitives import serialization as s; from cryptography.hazmat.primitives.asymmetric import rsa; k=rsa.generate_private_key(public_exponent=65537, key_size=2048); print(json.dumps({"private_key": k.private_bytes(s.Encoding.PEM, s.PrivateFormat.PKCS8, s.NoEncryption()).decode()}))' \
-      | aws secretsmanager create-secret --name "$SECRET" --description "VocalEyes: RSA key that signs account sign-in tokens" --secret-string file:///dev/stdin --query ARN --output text
-    echo "Stored as $SECRET. Run the service with AUTH_MODE=accounts ACCOUNTS_SIGNING_KEY_SECRET_ID=$SECRET" ;;
   check-table) shift; exec "$PY" -c "
 import os, sys
 from voice_sidecar.records import DynamoRecordStore

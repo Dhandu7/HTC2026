@@ -20,7 +20,7 @@ class AuthError(Exception):
     pass
 
 
-def _bearer(request) -> str:
+def bearer_token(request) -> str:
     h = request.headers.get("authorization", "")
     if not h.lower().startswith("bearer ") or len(h) < 10:
         raise AuthError("missing bearer token")
@@ -53,7 +53,7 @@ class JwtAuth:
     def user_id(self, request) -> str:
         import jwt
 
-        token = _bearer(request)
+        token = bearer_token(request)
         try:
             key = self._jwks.get_signing_key_from_jwt(token).key
             claims = jwt.decode(
@@ -78,7 +78,7 @@ class JwtAuth:
 
 
 class FirstOf:
-    """Accounts mode on a laptop: a bearer token if one is sent, else the dev X-User-Id header. Built only when the
+    """Auth0 mode on a laptop: a bearer token if one is sent, else the dev X-User-Id header. Built only when the
     server is bound to a loopback address (hosted_main.build_auth), exactly like DevAuth on its own."""
 
     def __init__(self, primary, fallback):

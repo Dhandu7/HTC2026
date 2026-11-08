@@ -17,13 +17,10 @@ ELEVENLABS_MODEL_ID       eleven_flash_v2_5          default model for new voice
 ELEVENLABS_OUTPUT_FORMAT  mp3_44100_128              audio format returned by /speak
 VOICE_SLOT_LIMIT          10                         the ElevenLabs plan's custom-voice cap (Starter 10, Creator 30, Pro 160)
 SPEAK_PER_MINUTE          60                         per-user rate limit on /speak (0 = off)
-AUTH_MODE                 jwt                        jwt | accounts | dev (dev only on a loopback address)
+AUTH_MODE                 jwt                        auth0 | jwt | dev (dev only on a loopback address)
+AUTH0_DOMAIN              -                          auth0: your tenant, e.g. vocaleyes.us.auth0.com
+AUTH0_AUDIENCE            -                          auth0: the API Identifier from Auth0 > Applications > APIs
 JWT_ISSUER, JWT_AUDIENCE, JWT_JWKS_URL               for jwt (JWKS defaults to <issuer>/.well-known/jwks.json)
-ACCOUNTS_ISSUER           vocaleyes-accounts         accounts: the iss claim of the tokens we sign
-ACCOUNTS_SIGNING_KEY_SECRET_ID  -                    accounts: Secrets Manager secret holding the RSA private key (PEM), in production
-ACCOUNTS_SIGNING_KEY      -                          accounts: the PEM itself, local development only
-ACCOUNTS_TOKEN_HOURS      168                        accounts: how long a sign-in lasts
-AUTH_PER_MINUTE           20                         accounts: sign-up/sign-in attempts per client address per minute
 HOST, PORT                127.0.0.1, 8790            listen address
 CORS_ORIGINS              (none)                     comma-separated browser origins allowed to call the API
 """
@@ -35,8 +32,8 @@ import os
 import sys
 from typing import Optional
 
-from .accounts import AccountService, DynamoAccountStore, MemoryAccountStore, TokenIssuer
 from .auth import DevAuth, FirstOf, JwtAuth
+from .users import Auth0UserInfo, DynamoUserStore, MemoryUserStore, UserService
 from .elevenlabs import DEFAULT_BASE_URL, ElevenLabsClient, key_shape_warning
 from .hosted import HostedConfig, HostedVoiceService
 from .hosted_app import create_hosted_app
@@ -85,57 +82,40 @@ def build_store(env=os.environ):
     return DynamoRecordStore(table, region=env.get("AWS_REGION"))
 
 
-def load_signing_key(env=os.environ, host: str = "127.0.0.1", secrets_client=None) -> Optional[str]:
-    """The RSA private key (PEM) that signs account tokens. None means: make a throwaway one (laptop only)."""
-    if env.get("ACCOUNTS_SIGNING_KEY"):
-        return env["ACCOUNTS_SIGNING_KEY"]
-    sid = env.get("ACCOUNTS_SIGNING_KEY_SECRET_ID")
-    if sid:
-        if secrets_client is None:
-            import boto3
-
-            secrets_client = boto3.client("secretsmanager", region_name=env.get("AWS_REGION"))
-        raw = secrets_client.get_secret_value(SecretId=sid)["SecretString"]
-        try:
-            obj = json.loads(raw)
-            if isinstance(obj, dict):
-                return obj["private_key"]
-        except (ValueError, KeyError):
-            pass
-        return raw
-    if host not in LOOPBACK:
-        raise SystemExit("AUTH_MODE=accounts needs ACCOUNTS_SIGNING_KEY_SECRET_ID (a Secrets Manager secret with the RSA private key) off a laptop.")
-    print("[hosted-voice] accounts: no signing key configured, using a throwaway one (sign-ins end when this stops)", file=sys.stderr, flush=True)
-    return None
+def auth0_settings(env=os.environ) -> "tuple[str, str]":
+    domain = env.get("AUTH0_DOMAIN", "").strip().removeprefix("https://").rstrip("/")
+    audience = env.get("AUTH0_AUDIENCE", "").strip()
+    if not domain or not audience:
+        raise SystemExit("AUTH_MODE=auth0 needs AUTH0_DOMAIN (e.g. vocaleyes.us.auth0.com) and AUTH0_AUDIENCE (the API Identifier).")
+    return domain, audience
 
 
-def build_accounts(env=os.environ, host: str = "127.0.0.1", store=None, secrets_client=None) -> "tuple[AccountService, TokenIssuer]":
+def build_users(env=os.environ, store=None, userinfo=None) -> UserService:
     if store is None:
         if env.get("VOICE_STORE", "dynamodb") == "memory":
-            store = MemoryAccountStore()
+            store = MemoryUserStore()
         else:
             table = env.get("VOICE_TABLE_NAME")
             if not table:
                 raise SystemExit("VOICE_TABLE_NAME is required for the dynamodb store.")
-            store = DynamoAccountStore(table, region=env.get("AWS_REGION"))
-    tokens = TokenIssuer(load_signing_key(env, host, secrets_client), env.get("ACCOUNTS_ISSUER", "vocaleyes-accounts"), ttl_hours=int(env.get("ACCOUNTS_TOKEN_HOURS", "168")))
-    return AccountService(store), tokens
+            store = DynamoUserStore(table, region=env.get("AWS_REGION"))
+    return UserService(store, userinfo or Auth0UserInfo(auth0_settings(env)[0]))
 
 
-def build_auth(env=os.environ, host: str = "127.0.0.1", tokens: Optional[TokenIssuer] = None):
+def build_auth(env=os.environ, host: str = "127.0.0.1", jwk_client=None):
     mode = env.get("AUTH_MODE", "jwt")
     if mode == "dev":
         if host not in LOOPBACK:
             raise SystemExit("AUTH_MODE=dev trusts the X-User-Id header and is only allowed on a loopback HOST.")
         return DevAuth()
-    if mode == "accounts":
-        if tokens is None:
-            raise SystemExit("AUTH_MODE=accounts needs the token issuer (build_accounts)")
-        own = JwtAuth(tokens.issuer, tokens.audience, jwk_client=tokens.jwk_client())
-        own.name = "accounts"
-        return FirstOf(own, DevAuth()) if host in LOOPBACK else own
+    if mode == "auth0":
+        domain, audience = auth0_settings(env)
+        # Auth0's issuer is https://<domain>/ with the trailing slash; its keys are at <issuer>.well-known/jwks.json.
+        a0 = JwtAuth(f"https://{domain}/", audience, jwk_client=jwk_client)
+        a0.name = "auth0"
+        return FirstOf(a0, DevAuth()) if host in LOOPBACK else a0  # on a laptop the dev test login keeps working
     if mode != "jwt":
-        raise SystemExit("AUTH_MODE must be jwt, accounts or dev")
+        raise SystemExit("AUTH_MODE must be auth0, jwt or dev")
     return JwtAuth(env.get("JWT_ISSUER", ""), env.get("JWT_AUDIENCE") or None, env.get("JWT_JWKS_URL") or None)
 
 
@@ -162,7 +142,8 @@ def check_config(env=os.environ) -> dict:
         "slot_limit": int(env.get("VOICE_SLOT_LIMIT", "10")),
         "auth": env.get("AUTH_MODE", "jwt"),
         "jwt_issuer": env.get("JWT_ISSUER"),
-        "accounts_signing_key_source": "ACCOUNTS_SIGNING_KEY" if env.get("ACCOUNTS_SIGNING_KEY") else ("secrets-manager" if env.get("ACCOUNTS_SIGNING_KEY_SECRET_ID") else None),
+        "auth0_domain": env.get("AUTH0_DOMAIN"),
+        "auth0_audience": env.get("AUTH0_AUDIENCE"),
         "host": env.get("HOST", "127.0.0.1"),
         "port": int(env.get("PORT", "8790")),
     }
@@ -182,15 +163,13 @@ def main(argv: Optional[list] = None) -> int:
 
         host, port = env.get("HOST", "127.0.0.1"), int(env.get("PORT", "8790"))
         service = build_service(env)
-        accounts, tokens = build_accounts(env, host) if env.get("AUTH_MODE", "jwt") == "accounts" else (None, None)
+        users = build_users(env) if env.get("AUTH_MODE", "jwt") == "auth0" else None
         app = create_hosted_app(
             service,
-            build_auth(env, host, tokens),
+            build_auth(env, host),
             [o for o in env.get("CORS_ORIGINS", "").split(",") if o],
             int(env.get("SPEAK_PER_MINUTE", "60")),
-            accounts=accounts,
-            tokens=tokens,
-            auth_per_minute=int(env.get("AUTH_PER_MINUTE", "20")),
+            users=users,
         )
         print(f"[hosted-voice] store={env.get('VOICE_STORE', 'dynamodb')} auth={env.get('AUTH_MODE', 'jwt')} listening on http://{host}:{port}", flush=True)
         uvicorn.run(app, host=host, port=port, log_level="warning")
