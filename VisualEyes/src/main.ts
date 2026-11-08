@@ -9,7 +9,7 @@ import { SessionRecorder } from "./metrics/recorder";
 import { BlinkSelector, DwellSelector, TargetTracker, type Rect, type SelectionMode } from "./input/selection";
 import { PredictionEngine } from "./predict/engine";
 import { CORE_WORDS, SEED_PHRASES, BENCHMARK_SENTENCES } from "./predict/vocab";
-import { llmAvailable, llmStatus, llmWarm, setLlmProfile } from "./predict/llm";
+import { llmAvailable, llmStatus, llmWarm, setLlmProfile, setLlmToken } from "./predict/llm";
 import { splitSentences } from "./predict/engine";
 import { ProfileManager, pickSamples, type Profile } from "./profile/profiles";
 import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost } from "./ui/keyboards";
@@ -994,7 +994,9 @@ async function refreshServices(attempt = 0) {
   llmEl.className = `llm-status ${ai.on ? "on" : "off"}`;
   llmEl.textContent = ai.on
     ? `✨ AI suggestions on${ai.fastModel ? ` (${ai.fastModel})` : ""}`
-    : ai.reason === "no-key"
+    : ai.reason === "sign-in"
+      ? "AI suggestions: sign in to turn them on. On-device prediction works without an account."
+      : ai.reason === "no-key"
       ? "AI suggestions off: the LLM server has no API key. Add ANTHROPIC_API_KEY to VisualEyes/.env and restart it."
       : "AI suggestions off: LLM server not running (npm run dev:all). On-device prediction still works.";
   updateTtsLine();
@@ -1076,6 +1078,8 @@ async function startAccount(user: SignedInUser) {
   account = user;
   setSkippedSignIn(localStorage, false);
   setTokenProvider(token); // "My voice" now belongs to this Auth0 user
+  setLlmToken(token); // and AI suggestions are allowed (the deployed site requires a sign-in for them)
+  void refreshServices(1);
   const firstTime = !localStorage.getItem(ACCOUNT_PROFILE + user.sub);
   switchProfile(profileFor(user));
   if (firstTime && user.name && profiles.active.name === "Me") profiles.update(profiles.active.id, { name: user.name });
@@ -1096,6 +1100,7 @@ async function signOut(message?: string) {
   if (account) await prefsSync.flush(); // don't lose a change made in the last second
   account = null;
   setTokenProvider(null);
+  setLlmToken(null);
   updateAccountLine();
   if (message) showToast(esc(message), 6000);
   await auth?.signOut(); // ends the Auth0 session too, then comes back to this page signed out

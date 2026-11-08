@@ -20,6 +20,8 @@ SPEAK_PER_MINUTE          60                         per-user rate limit on /spe
 AUTH_MODE                 jwt                        auth0 | jwt | dev (dev only on a loopback address)
 AUTH0_DOMAIN              -                          auth0: your tenant, e.g. vocaleyes.us.auth0.com
 AUTH0_AUDIENCE            -                          auth0: the API Identifier from Auth0 > Applications > APIs
+ALLOW_DEV_LOGIN           (off)                      auth0: 1 = also accept the dev X-User-Id header (laptop only, loopback HOST).
+                                                     NEVER behind a reverse proxy: the proxy makes every request look local.
 JWT_ISSUER, JWT_AUDIENCE, JWT_JWKS_URL               for jwt (JWKS defaults to <issuer>/.well-known/jwks.json)
 HOST, PORT                127.0.0.1, 8790            listen address
 CORS_ORIGINS              (none)                     comma-separated browser origins allowed to call the API
@@ -113,7 +115,9 @@ def build_auth(env=os.environ, host: str = "127.0.0.1", jwk_client=None):
         # Auth0's issuer is https://<domain>/ with the trailing slash; its keys are at <issuer>.well-known/jwks.json.
         a0 = JwtAuth(f"https://{domain}/", audience, jwk_client=jwk_client)
         a0.name = "auth0"
-        return FirstOf(a0, DevAuth()) if host in LOOPBACK else a0  # on a laptop the dev test login keeps working
+        # The dev test login is opt-in: behind a reverse proxy the service listens on loopback too, and trusting
+        # X-User-Id there would let anyone on the internet act as any user.
+        return FirstOf(a0, DevAuth()) if host in LOOPBACK and env.get("ALLOW_DEV_LOGIN") == "1" else a0
     if mode != "jwt":
         raise SystemExit("AUTH_MODE must be auth0, jwt or dev")
     return JwtAuth(env.get("JWT_ISSUER", ""), env.get("JWT_AUDIENCE") or None, env.get("JWT_JWKS_URL") or None)

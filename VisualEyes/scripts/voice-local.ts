@@ -52,6 +52,7 @@ export function serviceEnv(env: NodeJS.ProcessEnv, key: string): NodeJS.ProcessE
     // Auth0 sign-in when it is configured (on 127.0.0.1 the dev test login still works too), else the dev login alone.
     AUTH_MODE: env.AUTH_MODE || (env.AUTH0_DOMAIN && env.AUTH0_AUDIENCE ? "auth0" : "dev"),
     CORS_ORIGINS: env.CORS_ORIGINS || DEFAULT_CORS,
+    ALLOW_DEV_LOGIN: env.ALLOW_DEV_LOGIN || "1", // this machine only: the service listens on 127.0.0.1
   };
 }
 

@@ -85,10 +85,14 @@ def test_a_symmetric_token_is_refused():
         hosted_main.build_auth(ENV, "0.0.0.0", FakeJwks()).user_id(Req(bearer(t)))
 
 
-def test_off_a_laptop_the_dev_header_is_refused_and_on_one_it_works():
+def test_the_dev_header_is_refused_unless_explicitly_allowed_on_a_laptop():
     with pytest.raises(AuthError):
         hosted_main.build_auth(ENV, "0.0.0.0", FakeJwks()).user_id(Req({"X-User-Id": "dev-abc"}))
-    local = hosted_main.build_auth(ENV, "127.0.0.1", FakeJwks())
+    with pytest.raises(AuthError):  # loopback alone is not enough: behind a reverse proxy everything is loopback
+        hosted_main.build_auth(ENV, "127.0.0.1", FakeJwks()).user_id(Req({"X-User-Id": "dev-abc"}))
+    with pytest.raises(AuthError):  # and the switch does nothing off loopback
+        hosted_main.build_auth({**ENV, "ALLOW_DEV_LOGIN": "1"}, "0.0.0.0", FakeJwks()).user_id(Req({"X-User-Id": "dev-abc"}))
+    local = hosted_main.build_auth({**ENV, "ALLOW_DEV_LOGIN": "1"}, "127.0.0.1", FakeJwks())
     assert local.user_id(Req({"X-User-Id": "dev-abc"})) == "dev-abc"
     assert local.user_id(Req(bearer(token()))) == SUB
     with pytest.raises(AuthError):  # a bad token never falls back to the header
@@ -236,6 +240,13 @@ def test_without_a_valid_token_nothing_is_reachable(api):
     assert api.get("/v1/me/preferences").status_code == 401
     assert api.get("/v1/me/preferences", headers=bearer(token(key=OTHER_KEY))).status_code == 401
     assert api.get("/v1/me", headers={"X-User-Id": SUB}).status_code == 401
+
+
+def test_auth_check_for_the_web_server(api):
+    assert api.get("/v1/auth/check", headers=bearer(token())).status_code == 204
+    assert api.get("/v1/auth/check").status_code == 401
+    assert api.get("/v1/auth/check", headers={"X-User-Id": SUB}).status_code == 401
+    assert api.get("/v1/auth/check", headers=bearer(token(key=OTHER_KEY))).status_code == 401
 
 
 def test_the_password_routes_are_gone(api):

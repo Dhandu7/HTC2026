@@ -191,6 +191,12 @@ def create_hosted_app(
 def add_user_routes(app: FastAPI, users, user) -> None:
     """Profile and preferences for the signed-in person (the token's sub). See users.py."""
 
+    @app.get("/v1/auth/check", status_code=204)
+    def auth_check(uid: str = Depends(user)):
+        """204 for a valid sign-in, 401 otherwise. The web server asks this before passing a request to the paid
+        AI-suggestions server (Caddy forward_auth), so only signed-in people can spend API credit."""
+        return Response(status_code=204)
+
     @app.get("/v1/me")
     def me(request: Request, uid: str = Depends(user)):
         try:
