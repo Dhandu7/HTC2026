@@ -3,7 +3,7 @@
 import { GazeRegressor, chooseLambda, type Sample } from "./regression";
 import { PointFilter } from "./oneEuro";
 import type { FaceFrame } from "./tracker";
-import { checkHead, type HeadCheck, type HeadPos } from "./fixation";
+import { checkPosition, type PositionCheck, type FacePos } from "./fixation";
 
 export interface GazePoint {
   t: number;
@@ -31,33 +31,37 @@ export function clampToView(x: number, y: number, w: number, h: number, margin =
 }
 
 const KEY_CAL = "gazetype.calibration.v1";
-const KEY_CAL_NOSE = "gazetype.calibration.nose.v1";
-// Nose-pointer feature order: yaw, pitch, noseX, noseY, noseRelX, noseRelY, roll, faceH, eyeMidX, eyeMidY.
+const KEY_CAL_POINTER = "gazetype.calibration.pointer.v1";
+// Pointer-tracker feature order: yaw, pitch, tipX, tipY, tipRelX, tipRelY, roll, faceH, eyeMidX, eyeMidY.
 // The floors stop a near-constant feature from getting a huge weight after z-scoring.
-const NOSE_FLOOR = [0.02, 0.02, 0.01, 0.01, 0.02, 0.02, 0.02, 0.01, 0.01, 0.01];
+export const POINTER_FLOOR = [0.02, 0.02, 0.01, 0.01, 0.02, 0.02, 0.02, 0.01, 0.01, 0.01];
+/** Pointer-tracker cursor settings (also mirrored by the offline dwell simulation). */
+export const POINTER_FILTER = { minCutoff: 1.0, beta: 0.01 } as const;
+export const POINTER_STILL_RADIUS_PX = 10;
+export const POINTER_OFFSCREEN_PX = 300;
 const MAX_IMPLICIT = 240;
 
 export class GazeEngine {
   source: "camera" | "mouse" = "mouse";
   /** Where calibration is saved; set per profile so each person keeps their own. */
   storageKey = KEY_CAL;
-  /** Head-pointer calibrations use different features, so they are stored separately. */
+  /** Pointer-tracker calibrations use different features, so they are stored separately. */
   private get calKey() {
-    if (!this.noseMode) return this.storageKey;
-    return this.storageKey === KEY_CAL ? KEY_CAL_NOSE : `${this.storageKey}.nose`;
+    if (!this.pointerMode) return this.storageKey;
+    return this.storageKey === KEY_CAL ? KEY_CAL_POINTER : `${this.storageKey}.pointer`;
   }
   private regressor = new GazeRegressor(1.0, 4);
   private filter = new PointFilter(0.8, 0.015);
-  private noseMode = false;
-  // Nose pointer only: ignore wobble smaller than this many px, and trail the true point by that much when moving.
+  private pointerMode = false;
+  // Pointer tracker only: ignore wobble smaller than this many px, and trail the true point by that much when moving.
   private anchor: { x: number; y: number } | null = null;
-  private stillRadiusPx = 10;
+  private stillRadiusPx = POINTER_STILL_RADIUS_PX;
 
-  /** Head/nose pointer: 10 head features, no blink freeze, light smoothing, cursor kept on screen. Call before calibrating. */
-  configureNose() {
-    this.noseMode = true;
-    this.regressor = new GazeRegressor(1.0, 4, NOSE_FLOOR);
-    this.filter = new PointFilter(1.0, 0.01);
+  /** Pointer tracker: 10 pointer features, no blink freeze, light smoothing, cursor kept on screen. Call before calibrating. */
+  configurePointer() {
+    this.pointerMode = true;
+    this.regressor = new GazeRegressor(1.0, 4, POINTER_FLOOR);
+    this.filter = new PointFilter(POINTER_FILTER.minCutoff, POINTER_FILTER.beta);
     this.anchor = null;
   }
 
@@ -88,9 +92,9 @@ export class GazeEngine {
   irisDiameter = NaN;
   faceVisible = false;
   inferMs = 0;
-  /** Head position (nose x/y, face height) during calibration, and a smoothed current one. */
-  private headRef: HeadPos | null = null;
-  private headNow: HeadPos | null = null;
+  /** Seating position (face x/y, face height) during calibration, and a smoothed current one. */
+  private posRef: FacePos | null = null;
+  private posNow: FacePos | null = null;
   /** Drift correction from the last quick re-center, added to every estimate (px). */
   private offset = { x: 0, y: 0 };
 
@@ -134,13 +138,13 @@ export class GazeEngine {
     }
     this.inferMs = this.inferMs * 0.9 + f.inferMs * 0.1;
     this.irisDiameter = Number.isFinite(this.irisDiameter) ? this.irisDiameter * 0.95 + f.irisDiameter * 0.05 : f.irisDiameter;
-    const hp = f.headPos as HeadPos;
-    this.headNow = this.headNow ? (this.headNow.map((v, i) => v * 0.85 + hp[i] * 0.15) as HeadPos) : [...hp];
+    const hp = f.facePos as FacePos;
+    this.posNow = this.posNow ? (this.posNow.map((v, i) => v * 0.85 + hp[i] * 0.15) as FacePos) : [...hp];
     this.recent.push(f);
     this.dbg.frame = f;
     while (this.recent.length && f.t - this.recent[0].t > 1500) this.recent.shift();
-    // The nose pointer doesn't use the eyes, so a blink must not freeze it.
-    const closed = !this.noseMode && f.blinkL > 0.45 && f.blinkR > 0.45;
+    // The pointer tracker doesn't use the eyes, so a blink must not freeze it.
+    const closed = !this.pointerMode && f.blinkL > 0.45 && f.blinkR > 0.45;
     if (closed || !this.calibrated) {
       // Freeze the cursor while the eyes are closed: iris landmarks are garbage then.
       this.emit({ ...this.last, t: f.t, valid: this.calibrated && this.last.valid, blinkL: f.blinkL, blinkR: f.blinkR, source: "camera" });
@@ -150,9 +154,9 @@ export class GazeEngine {
     this.dbg.raw = p;
     // Drift correction from the last quick re-center.
     const q = { x: p.x + this.offset.x, y: p.y + this.offset.y };
-    if (this.noseMode) {
+    if (this.pointerMode) {
       // Pointing far off the screen: hold the last point and mark it invalid so nothing is selected.
-      const OFF = 300;
+      const OFF = POINTER_OFFSCREEN_PX;
       if (q.x < -OFF || q.x > innerWidth + OFF || q.y < -OFF || q.y > innerHeight + OFF) {
         this.emit({ ...this.last, t: f.t, valid: false, blinkL: f.blinkL, blinkR: f.blinkR, source: "camera", offscreen: true });
         return;
@@ -210,30 +214,30 @@ export class GazeEngine {
     return { ...this.offset };
   }
 
-  setCalibration(samples: Sample[], headRef?: HeadPos | null) {
+  setCalibration(samples: Sample[], posRef?: FacePos | null) {
     this.calSamples = samples;
     this.implicit = [];
     this.offset = { x: 0, y: 0 };
-    if (headRef !== undefined) this.headRef = headRef;
-    // Nose pointer: choose the ridge strength by leave-one-dot-out cross-validation instead of a fixed guess.
-    if (this.noseMode) {
-      const cv = chooseLambda(samples, 4, NOSE_FLOOR);
+    if (posRef !== undefined) this.posRef = posRef;
+    // Pointer tracker: choose the ridge strength by leave-one-dot-out cross-validation instead of a fixed guess.
+    if (this.pointerMode) {
+      const cv = chooseLambda(samples, 4, POINTER_FLOOR);
       if (Number.isFinite(cv.medianErrPx)) this.regressor.lambda = cv.lambda;
     }
     this.refit();
     try {
       localStorage.setItem(this.calKey, JSON.stringify(samples));
-      if (this.headRef) localStorage.setItem(`${this.calKey}.head`, JSON.stringify(this.headRef));
+      if (this.posRef) localStorage.setItem(`${this.calKey}.pos`, JSON.stringify(this.posRef));
     } catch {
       /* storage full / disabled */
     }
   }
 
-  /** Is the head still roughly where it was during calibration? null if unknown (no face / no reference). */
-  headCheck(): HeadCheck | null {
-    // The head pointer moves the head on purpose, so "head moved since calibration" means nothing there.
-    if (this.noseMode || !this.headRef || !this.headNow || !this.faceVisible || this.source !== "camera") return null;
-    return checkHead(this.headRef, this.headNow);
+  /** Is the user still roughly where they were during calibration? null if unknown (no face / no reference). */
+  positionCheck(): PositionCheck | null {
+    // The pointer tracker expects movement, so "moved since calibration" means nothing there.
+    if (this.pointerMode || !this.posRef || !this.posNow || !this.faceVisible || this.source !== "camera") return null;
+    return checkPosition(this.posRef, this.posNow);
   }
 
   get calibrationSamples() {
@@ -246,8 +250,8 @@ export class GazeEngine {
       if (!raw) return false;
       const samples: Sample[] = JSON.parse(raw);
       if (samples[0]?.features.length !== this.recent.at(-1)?.vector.length) return false;
-      const head = localStorage.getItem(`${this.calKey}.head`);
-      this.setCalibration(samples, head ? (JSON.parse(head) as HeadPos) : null);
+      const pos = localStorage.getItem(`${this.calKey}.pos`);
+      this.setCalibration(samples, pos ? (JSON.parse(pos) as FacePos) : null);
       return true;
     } catch {
       return false;

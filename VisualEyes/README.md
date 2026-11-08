@@ -38,8 +38,8 @@ On macOS the overlay asks for Camera access. Auto-paste needs **Accessibility** 
 ## How it works
 
 ```
-webcam ─► MediaPipe Face Landmarker (478 landmarks + blendshapes + head pose, on-device, ~30 fps)
-        ─► features: iris-in-eye (x,y), eyeLook blendshapes, head yaw/pitch, face position/scale
+webcam ─► MediaPipe Face Landmarker (478 landmarks + blendshapes + face pose, on-device, ~30 fps)
+        ─► features: iris-in-eye (x,y), eyeLook blendshapes, face yaw/pitch, face position/scale
         ─► ridge regression (z-scored, quadratic gaze terms) fit by 9-point calibration
         ─► One Euro filter ─► target tracker (snap + hysteresis) ─► dwell | deliberate-blink selector
         ─► keyboard ─► prediction engine (+ optional LLM) ─► speak / insert / learn
@@ -62,20 +62,18 @@ webcam ─► MediaPipe Face Landmarker (478 landmarks + blendshapes + head pose
 | Overlay | `electron/main.mjs` | Transparent, click-through when collapsed, non-focusable so the target app keeps focus. Global shortcut, tray menu, and paste via the OS. |
 | Voice | `src/input/voice.ts` | Vosk wasm with a fixed grammar ("gaze type", "open/hide keyboard", "read it out"). Works offline, and other speech can't trigger it. |
 
-### Recording and replaying gaze sessions (offline evaluation)
+### Recording and replaying sessions (pointer tracker and eye tracker)
 
-Every tracking change is judged on the same recorded data, not on a fresh live run.
+Tracking changes are judged on recorded data, averaged over **all** recordings, not on one live run.
 
-1. Start with the camera, then press **● Record**. Fill in participant, glasses, lighting and (ideally) a tape-measured eye-to-screen distance.
-   - **Full (team), about 12 min:** 25-point grid, 16 validation points, then the validation points again at +2, +5 and +10 min to measure drift. Stay seated between checks.
-   - **Short (stranger), about 1 min:** the app's 9 calibration points plus the 16 validation points.
-2. The browser downloads `gazesession-<id>-<time>.json` (raw landmarks, blendshapes and head pose per frame, about 50 MB for a full session) and, if ticked, a local `.webm` video. Move them to `VisualEyes/recordings/`, which git ignores.
-3. Run `npm run replay -- recordings/*.json` (add `--json results.json` to save the rows). It prints:
-   - **Personal:** each calibration set (25/9/5 points) × ridge λ (0.1/1/10/100), scored on the validation points. `ridge λ=1 (app)` on `9pt` is what the app does today.
-   - **Drift:** one calibration scored at +0, +2, +5 and +10 min.
-   - **Pooled (needs 2+ participants):** leave one participant out. Prior trained on everyone else vs. personal 9/5 points vs. prior + offset vs. prior + fine-tune.
-
-Accuracy (offset of the mean gaze from the target, with x and y separately) and precision (SD and RMS sample-to-sample) are reported separately, in degrees. Hit rate is the share of frames inside a cell-sized box centred on the target, for a 6-chip (3×2) and a 16-grid (4×4) layout. Degrees use the measured distance, or the iris-size estimate if none was entered. Replay scores raw predictions, without the One Euro filter, like the app's validation step.
+1. Start the **🎯 Pointer tracker** (or 👁 Eye tracker) and press **● Record**. The recording follows the active mode. Use one Participant ID per person.
+   - **Quick trial (~1.5 min):** 25-dot grid + 8 check dots. In pointer mode the check dots stay up 3.5 s so the 2 s dwell can be simulated.
+   - **Full (~12 min):** adds 16 check dots and drift checks at +2, +5, +10 min. **Short:** 9 dots + 16 check dots, for strangers.
+2. Every **◎ Calibrate** also downloads `gazecal-<pointer|eye>-<id>-<time>.json` when "Save each calibration" is on in ⚙ Settings (default on). The calibration toast now also shows the **hit rate for 6 large buttons and for the 4×4 grid** on the check dots.
+3. Move the files to `VisualEyes/recordings/` (git-ignored) and run `npm run replay -- recordings/*.json` (`--json out.json` saves the rows). It rebuilds the features from the raw landmarks and fits **exactly main's model** for each file's pointer mode (pointer: the 10 pointer features, `POINTER_FLOOR`, λ by leave-one-dot-out CV, per-dot outlier trimming; eye: 7 features, ridge λ=1). It prints per recording and as a **mean per pointer mode**:
+   - hit rates (4-chip, 6-chip, 16-grid), x/y offset, jitter, on the held-out check dots and drift checks;
+   - a **dwell simulation** with main's cursor pipeline (pointer: smoothing, clamp, 10 px leash, off-screen cut-off) and 2 s dwell: correct / wrong / timed out.
+   - `--as-pointer` forces the pointer pipeline on eye recordings (plumbing test only).
 
 ### Why a 4×4 grid of letter groups and not QWERTY
 
@@ -97,7 +95,7 @@ Let judges try it. Mouse mode (hover to dwell) runs the same UI and metrics with
 ## Honest limitations
 
 - No disabled-user evaluation yet. Every number is from able-bodied testers unless stated otherwise.
-- Accuracy depends on lighting, glasses, camera and head pose. Report the conditions with every number.
+- Accuracy depends on lighting, glasses, camera and face pose. Report the conditions with every number.
 - The degree figure assumes a screen size (in Settings) and an estimated viewing distance.
 - The word list is the Google 10k list (research/educational use). Swap it before any commercial use.
 - English only for now. Multilingual support is on the roadmap.

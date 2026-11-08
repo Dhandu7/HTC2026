@@ -182,9 +182,9 @@ dialog menu { flex-wrap: wrap; }
 #gaze-hint[hidden] { display: none; }
 .recenter-msg { top: 30%; color: var(--text); font-size: 30px; }
 
-/* ---- head moved away from the calibration position ---- */
-#head-hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 54; background: #2a2108; border: 2px solid var(--accent-2); border-radius: 12px; padding: 10px 20px; font-size: clamp(16px, 2vw, 24px); font-weight: 600; pointer-events: none; max-width: 90vw; text-align: center; }
-#head-hint[hidden] { display: none; }
+/* ---- moved away from the calibration position ---- */
+#position-hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 54; background: #2a2108; border: 2px solid var(--accent-2); border-radius: 12px; padding: 10px 20px; font-size: clamp(16px, 2vw, 24px); font-weight: 600; pointer-events: none; max-width: 90vw; text-align: center; }
+#position-hint[hidden] { display: none; }
 /* calibration progress */
 .cal-progress { position: absolute; left: 0; right: 0; bottom: 28px; text-align: center; color: var(--muted); font-size: 18px; }
 .cal-bar { width: min(560px, 70vw); height: 8px; margin: 0 auto 10px; border-radius: 4px; background: #1b222c; overflow: hidden; }

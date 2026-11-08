@@ -1,76 +1,102 @@
-// Offline replay of recorded sessions: rebuild features from raw landmarks, fit gaze
-// sources on calibration targets, and score them on held-out targets. Pure; the CLI is
-// scripts/replay.ts.
+// Offline replay of recorded sessions: rebuild features from raw landmarks, fit the app's own
+// model on the calibration dots, and score it on held-out dots. Pure; the CLI is
+// scripts/replay.ts. Mirrors main exactly: eye mode = 7 eye features, ridge λ=1; pointer mode =
+// 10 pointer features, POINTER_FLOOR, λ by leave-one-dot-out CV, per-dot outlier trimming.
 import { estimateDistanceCm, type ViewingGeometry } from "../gaze/accuracy";
-import { GazeRegressor, type Sample } from "../gaze/regression";
-import { APP_9, CORNERS_5, frameFeatures, pointKey, type RecordedSession } from "../record/format";
-import { evaluate, type EvalStats, type PointPredictions, type XY } from "./metrics";
-import { cleanFixation } from "../gaze/fixation";
+import { GazeRegressor, chooseLambda, type Sample } from "../gaze/regression";
+import { POINTER_FLOOR } from "../gaze/engine";
+import { eyeVector, pointerVector } from "../gaze/features";
+import { trimOutlierIdx } from "../ui/calibration";
+import { frameFeatures, pointKey, type PointerMode, type RecordedSession } from "../record/format";
+import { EYE_DWELL, POINTER_DWELL, simulateDwell, type DwellStats } from "./dwell";
+import { LAYOUTS, evaluate, type EvalStats, type PointPredictions, type XY } from "./metrics";
 
-/** Frames for one target, as feature vectors. Targets are in viewport fractions so sessions can be pooled. */
+/** Frames for one target, as model input vectors. Targets are in viewport fractions. */
 export interface PreparedPoint {
   fx: number;
   fy: number;
   vw: number;
   vh: number;
   vectors: number[][];
+  /** Every frame from the moment the dot appeared, in time order, for dwell simulation. */
+  timeline: { t: number; v: number[] | null; closed: boolean }[];
+  tShown: number;
+  tEnd: number;
 }
 
 export interface PreparedSession {
   name: string;
   participant: string;
+  pointer: PointerMode;
+  /** Pointer the file was recorded with (differs from `pointer` when forced with asPointer). */
+  recordedPointer: PointerMode;
   session: RecordedSession;
   geometry: ViewingGeometry;
   cal: PreparedPoint[];
   val: PreparedPoint[];
   /** Drift checks keyed by minutes after validation. */
   drift: Map<number, PreparedPoint[]>;
-  /** Fraction of collection frames with no face or closed eyes. */
+  /** Fraction of collection frames with no face (or, in eye mode, closed eyes). */
   lostFrac: number;
+}
+
+export interface PrepareOptions {
+  /** Score with the pointer pipeline even if the file was recorded in eye mode (plumbing tests). */
+  asPointer?: boolean;
 }
 
 const BLINK = 0.45;
 
-export function prepare(session: RecordedSession, name: string): PreparedSession {
-  const pts = session.targets.map((t) => ({ fx: t.fx, fy: t.fy, vw: t.vw, vh: t.vh, vectors: [] as number[][] }));
+export function prepare(session: RecordedSession, name: string, opts: PrepareOptions = {}): PreparedSession {
+  const recordedPointer: PointerMode = session.meta.pointer ?? "eye";
+  const pointer: PointerMode = opts.asPointer ? "pointer" : recordedPointer;
+  const toVec = pointer === "pointer" ? pointerVector : eyeVector;
+  const pts: PreparedPoint[] = session.targets.map((t) => ({ fx: t.fx, fy: t.fy, vw: t.vw, vh: t.vh, vectors: [], timeline: [], tShown: t.tShown, tEnd: t.tCollect1 }));
   const iris: number[] = [];
   let total = 0;
   let lost = 0;
   for (const f of session.frames) {
+    const target = session.targets[f.ti];
+    if (f.t < target.tShown) continue;
+    const feats = frameFeatures(session, f);
+    const closed = !!feats && feats.blinkL > BLINK && feats.blinkR > BLINK;
+    pts[f.ti].timeline.push({ t: f.t, v: feats ? toVec(feats.vector) : null, closed });
     if (!f.c) continue;
     total++;
-    const feats = frameFeatures(session, f);
-    // Same rule as the app: drop frames with no face or both eyes closed.
-    if (!feats || (feats.blinkL > BLINK && feats.blinkR > BLINK)) {
+    // Same rule as the app's calibration: no face = no sample; eye mode also drops closed eyes.
+    if (!feats || (pointer === "eye" && closed)) {
       lost++;
       continue;
     }
-    // Eye mode uses the first 7 features, as in the app (main.ts); the rest are head-pointer features.
-    pts[f.ti].vectors.push(feats.vector.slice(0, 7));
+    pts[f.ti].vectors.push(toVec(feats.vector));
     if (Number.isFinite(feats.irisDiameter)) iris.push(feats.irisDiameter);
   }
   iris.sort((a, b) => a - b);
-  const medianIris = iris[Math.floor(iris.length / 2)];
-  const est = estimateDistanceCm(medianIris, session.meta.hfovDeg || 60);
+  const est = estimateDistanceCm(iris[Math.floor(iris.length / 2)], session.meta.hfovDeg || 60);
   const geometry: ViewingGeometry = {
     screenDiagonalIn: session.meta.screenDiagonalIn || 14,
     screenWidthPx: session.env.screenWidth,
     screenHeightPx: session.env.screenHeight,
     distanceCm: session.meta.distanceCm || (Number.isFinite(est) ? est : 60),
   };
+  // A dot shown again (the app's re-check of the worst dots) replaces the earlier look.
+  const calByKey = new Map<string, PreparedPoint>();
+  const val: PreparedPoint[] = [];
   const drift = new Map<number, PreparedPoint[]>();
   session.targets.forEach((t, i) => {
-    if (t.segment !== "drift") return;
-    if (!drift.has(t.atMin)) drift.set(t.atMin, []);
-    drift.get(t.atMin)!.push(pts[i]);
+    if (t.segment === "cal") calByKey.set(pointKey(t.fx, t.fy), pts[i]);
+    else if (t.segment === "val") val.push(pts[i]);
+    else (drift.get(t.atMin) ?? drift.set(t.atMin, []).get(t.atMin)!).push(pts[i]);
   });
   return {
     name,
     participant: session.meta.participant || name,
+    pointer,
+    recordedPointer,
     session,
     geometry,
-    cal: pts.filter((_, i) => session.targets[i].segment === "cal"),
-    val: pts.filter((_, i) => session.targets[i].segment === "val"),
+    cal: [...calByKey.values()],
+    val,
     drift,
     lostFrac: total ? lost / total : NaN,
   };
@@ -78,29 +104,30 @@ export function prepare(session: RecordedSession, name: string): PreparedSession
 
 export type Predictor = (features: number[]) => XY;
 
-export type CalSet = "25pt" | "9pt" | "5pt";
-
-export function calPoints(s: PreparedSession, set: CalSet): PreparedPoint[] {
-  if (set === "25pt") return s.cal;
-  const keep = set === "9pt" ? APP_9 : CORNERS_5;
-  return s.cal.filter((p) => keep.has(pointKey(p.fx, p.fy)));
-}
-
-/** The app's calibration clean-up: drop frames at each dot that disagree with the rest. */
-export function cleanPoints(points: PreparedPoint[]): PreparedPoint[] {
-  return points.map((p) => ({ ...p, vectors: cleanFixation(p.vectors).kept.map((i) => p.vectors[i]) }));
-}
-
+/** Calibration samples after the app's per-dot outlier trimming, in viewport fractions. */
 export function toSamples(points: PreparedPoint[]): Sample[] {
-  return points.flatMap((p) => p.vectors.map((features) => ({ features, x: p.fx, y: p.fy })));
+  return points.flatMap((p) => trimOutlierIdx(p.vectors).map((i) => ({ features: p.vectors[i], x: p.fx, y: p.fy })));
 }
 
-export function ridge(points: PreparedPoint[], lambda: number): Predictor | null {
+export interface FittedModel {
+  predict: Predictor;
+  lambda: number;
+}
+
+/** The model main fits in this pointer mode. */
+export function mainModel(s: PreparedSession, points = s.cal): FittedModel | null {
   const samples = toSamples(points);
   if (samples.length < 8) return null;
-  const r = new GazeRegressor(lambda, 4);
+  if (s.pointer === "pointer") {
+    const cv = chooseLambda(samples, 4, POINTER_FLOOR);
+    const lambda = Number.isFinite(cv.medianErrPx) ? cv.lambda : 1;
+    const r = new GazeRegressor(lambda, 4, POINTER_FLOOR);
+    r.fit(samples);
+    return { predict: (f) => r.predict(f), lambda };
+  }
+  const r = new GazeRegressor(1.0, 4);
   r.fit(samples);
-  return (f) => r.predict(f);
+  return { predict: (f) => r.predict(f), lambda: 1 };
 }
 
 export function score(s: PreparedSession, points: PreparedPoint[], predict: Predictor): EvalStats {
@@ -112,114 +139,42 @@ export function score(s: PreparedSession, points: PreparedPoint[], predict: Pred
       return { x: q.x * p.vw, y: q.y * p.vh };
     }),
   }));
-  const vw = points[0]?.vw ?? 1;
-  const vh = points[0]?.vh ?? 1;
-  return evaluate(pp, vw, vh, s.geometry);
+  return evaluate(pp, points[0]?.vw ?? 1, points[0]?.vh ?? 1, s.geometry);
 }
 
 export interface ResultRow {
-  section: "personal" | "drift" | "pooled";
   session: string;
   participant: string;
+  pointer: PointerMode;
   source: string;
-  calSet: string;
   testSet: string;
   stats: EvalStats;
 }
 
-export const LAMBDAS = [0.1, 1, 10, 100];
-export const PRIOR_STRENGTHS = [1, 10, 100];
+export interface DwellRow {
+  session: string;
+  pointer: PointerMode;
+  source: string;
+  layout: string;
+  stats: DwellStats;
+}
 
-/** Per-session evaluation: each calibration set × lambda, scored on the validation points. */
-export function personalRows(s: PreparedSession): ResultRow[] {
-  const rows: ResultRow[] = [];
-  const sets: CalSet[] = s.session.meta.mode === "full" ? ["25pt", "9pt", "5pt"] : ["9pt", "5pt"];
-  for (const set of sets)
-    for (const lambda of LAMBDAS) {
-      const p = ridge(calPoints(s, set), lambda);
-      if (!p) continue;
-      rows.push({
-        section: "personal",
-        session: s.name,
-        participant: s.participant,
-        source: `ridge λ=${lambda}${lambda === 1 && set === "9pt" ? " (old app)" : ""}`,
-        calSet: set,
-        testSet: "val",
-        stats: score(s, s.val, p),
-      });
-      // Same fit after dropping outlier frames at each dot (what the app's calibration now does).
-      const c = lambda === 1 ? ridge(cleanPoints(calPoints(s, set)), lambda) : null;
-      if (c)
-        rows.push({
-          section: "personal",
-          session: s.name,
-          participant: s.participant,
-          source: `ridge λ=1 cleaned${set === "9pt" ? " (app)" : ""}`,
-          calSet: set,
-          testSet: "val",
-          stats: score(s, s.val, c),
-        });
-    }
+/** Main's model scored on the check dots and on each drift check. */
+export function accuracyRows(s: PreparedSession): ResultRow[] {
+  const m = mainModel(s);
+  if (!m || !s.val.length) return [];
+  const source = `main ${s.pointer} model (λ=${m.lambda})`;
+  const base = { session: s.name, participant: s.participant, pointer: s.pointer, source };
+  const rows: ResultRow[] = [{ ...base, testSet: "check dots", stats: score(s, s.val, m.predict) }];
+  for (const [min, pts] of [...s.drift.entries()].sort((a, b) => a[0] - b[0])) rows.push({ ...base, testSet: `drift +${min} min`, stats: score(s, pts, m.predict) });
   return rows;
 }
 
-/** Drift: fit once on the densest calibration set, score validation then every drift check. */
-export function driftRows(s: PreparedSession, lambda = 1): ResultRow[] {
-  if (!s.drift.size) return [];
-  const set: CalSet = s.cal.length >= 25 ? "25pt" : "9pt";
-  const p = ridge(calPoints(s, set), lambda);
-  if (!p) return [];
-  const base = { section: "drift" as const, session: s.name, participant: s.participant, source: `ridge λ=${lambda}`, calSet: set };
-  const rows: ResultRow[] = [{ ...base, testSet: "+0 min", stats: score(s, s.val, p) }];
-  for (const [m, pts] of [...s.drift.entries()].sort((a, b) => a[0] - b[0])) rows.push({ ...base, testSet: `+${m} min`, stats: score(s, pts, p) });
-  return rows;
-}
-
-/**
- * Pooled prior test (leave one participant out): train on everyone else's calibration
- * data, then compare personal-only vs prior-only vs prior + a few of this person's points.
- */
-export function pooledRows(all: PreparedSession[], lambda = 1): ResultRow[] {
-  const people = [...new Set(all.map((s) => s.participant))];
-  if (people.length < 2) return [];
-  const rows: ResultRow[] = [];
-  for (const held of all) {
-    const others = all.filter((s) => s.participant !== held.participant);
-    const priorSamples = others.flatMap((s) => toSamples(s.cal));
-    if (priorSamples.length < 8) continue;
-    const prior = new GazeRegressor(lambda, 4);
-    prior.fit(priorSamples);
-    const base = { section: "pooled" as const, session: held.name, participant: held.participant, testSet: "val" };
-    const add = (source: string, calSet: string, p: Predictor | null) => p && rows.push({ ...base, source, calSet, stats: score(held, held.val, p) });
-
-    add(`prior only (${others.length} sessions)`, "none", (f) => prior.predict(f));
-    for (const set of ["9pt", "5pt"] as CalSet[]) {
-      const pts = calPoints(held, set);
-      const samples = toSamples(pts);
-      if (!samples.length) continue;
-      add(`personal ridge λ=${lambda}`, set, ridge(pts, lambda));
-      // Bias-only: shift the prior by its mean residual on this person's points.
-      let dx = 0;
-      let dy = 0;
-      for (const s of samples) {
-        const q = prior.predict(s.features);
-        dx += (s.x - q.x) / samples.length;
-        dy += (s.y - q.y) / samples.length;
-      }
-      add("prior + offset", set, (f) => {
-        const q = prior.predict(f);
-        return { x: q.x + dx, y: q.y + dy };
-      });
-      for (const k of PRIOR_STRENGTHS) {
-        const r = new GazeRegressor(lambda, 4);
-        r.fitWithPrior(samples, prior, k * samples.length / Math.max(1, pts.length));
-        add(`prior + fine-tune k=${k}`, set, (f) => r.predict(f));
-      }
-    }
-  }
-  return rows;
-}
-
-export function evaluateAll(sessions: PreparedSession[]): ResultRow[] {
-  return [...sessions.flatMap(personalRows), ...sessions.flatMap((s) => driftRows(s)), ...pooledRows(sessions)];
+/** Dwell simulation with main's cursor and dwell settings for this pointer mode. */
+export function dwellRows(s: PreparedSession): DwellRow[] {
+  const m = mainModel(s);
+  if (!m) return [];
+  const cfg = s.pointer === "pointer" ? POINTER_DWELL : EYE_DWELL;
+  const dots = [...s.val, ...[...s.drift.values()].flat()];
+  return LAYOUTS.map((layout) => ({ session: s.name, pointer: s.pointer, source: `main ${s.pointer} (dwell ${cfg.dwellMs} ms)`, layout: layout.name, stats: simulateDwell(dots, m.predict, { ...cfg, layout }) }));
 }

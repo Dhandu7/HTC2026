@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { GazeRegressor, solve } from "../src/gaze/regression";
 import { PointFilter } from "../src/gaze/oneEuro";
 import { estimateDistanceCm, pxToDegrees, degreesToPx, summarizeErrors } from "../src/gaze/accuracy";
-import { headPose } from "../src/gaze/features";
+import { facePose } from "../src/gaze/features";
 
 describe("solve", () => {
   it("solves a 3x3 system", () => {
@@ -66,9 +66,9 @@ describe("accuracy", () => {
   });
 });
 
-describe("headPose", () => {
+describe("facePose", () => {
   it("is zero for identity", () => {
-    const p = headPose([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    const p = facePose([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
     expect(p.yaw).toBeCloseTo(0);
     expect(p.pitch).toBeCloseTo(0);
     expect(p.roll).toBeCloseTo(0);

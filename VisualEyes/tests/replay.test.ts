@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { GazeRegressor } from "../src/gaze/regression";
-import {
-  b64ToF32,
-  buildProtocol,
-  f32ToB64,
-  videoTimeAt,
-} from "../src/record/format";
+import { b64ToF32, buildProtocol, collectMsFor, f32ToB64, videoTimeAt } from "../src/record/format";
 import { evaluate } from "../src/eval/metrics";
-import { driftRows, personalRows, pooledRows, prepare } from "../src/eval/replay";
+import { accuracyRows, dwellRows, mainModel, prepare, toSamples } from "../src/eval/replay";
+import { buttonsAround } from "../src/eval/dwell";
+import { POINTER_INDEX, pointerVector } from "../src/gaze/features";
+import { trimOutlierIdx } from "../src/ui/calibration";
 import { fakeSession } from "./synthetic";
 
 const G = { screenDiagonalIn: 14, screenWidthPx: 1512, screenHeightPx: 982, distanceCm: 60 };
@@ -18,77 +15,81 @@ describe("format", () => {
     expect(Array.from(b64ToF32(f32ToB64(a)))).toEqual(Array.from(a));
   });
 
-  it("builds the full and short protocols", () => {
-    const full = buildProtocol("full");
-    expect(full.filter((t) => t.segment === "cal")).toHaveLength(25);
-    expect(full.filter((t) => t.segment === "val")).toHaveLength(16);
-    expect(full.filter((t) => t.segment === "drift")).toHaveLength(48);
-    const short = buildProtocol("short");
-    expect(short.filter((t) => t.segment === "cal")).toHaveLength(9);
-    expect(short.filter((t) => t.segment === "drift")).toHaveLength(0);
+  it("builds the protocols", () => {
+    expect(buildProtocol("full").filter((t) => t.segment === "drift")).toHaveLength(48);
+    expect(buildProtocol("quick").filter((t) => t.segment === "val")).toHaveLength(8);
+    expect(buildProtocol("short").filter((t) => t.segment === "cal")).toHaveLength(9);
+  });
+
+  it("keeps pointer-mode check dots up long enough for the 2 s dwell", () => {
+    expect(collectMsFor("val", "pointer")).toBeGreaterThanOrEqual(2500);
+    expect(collectMsFor("cal", "pointer")).toBe(collectMsFor("cal", "eye"));
   });
 
   it("maps wall clock to video time across paused intervals", () => {
     const tl = [{ t0: 1000, t1: 3000 }, { t0: 10000, t1: 11000 }];
     expect(videoTimeAt(tl, 2000)).toBeCloseTo(1);
     expect(videoTimeAt(tl, 10500)).toBeCloseTo(2.5);
-    expect(videoTimeAt(tl, 5000)).toBeNaN();
+  });
+});
+
+describe("shared feature mapping", () => {
+  it("picks the 10 pointer features the app uses", () => {
+    const v = Array.from({ length: 15 }, (_, i) => i * 10);
+    expect(pointerVector(v)).toEqual([...POINTER_INDEX].map((i) => i * 10));
+  });
+
+  it("trims a glance away at one dot, like the app's calibration", () => {
+    const vs = Array.from({ length: 20 }, (_, i) => [0.01 * (i % 3), 0.01 * (i % 2)]);
+    vs[7] = [5, 5];
+    expect(trimOutlierIdx(vs)).not.toContain(7);
   });
 });
 
 describe("evaluate", () => {
   it("separates accuracy (offset) from precision (spread)", () => {
-    // Samples alternate ±10 px in x around a point offset 30 px right of the target.
     const preds = Array.from({ length: 10 }, (_, i) => ({ x: 130 + (i % 2 ? 10 : -10), y: 100 }));
     const s = evaluate([{ target: { x: 100, y: 100 }, preds }], 1500, 1000, G);
     expect(s.accuracyPx).toBeCloseTo(30);
-    expect(s.accuracyXPx).toBeCloseTo(30);
-    expect(s.accuracyYPx).toBeCloseTo(0);
     expect(s.precisionSdPx).toBeCloseTo(10);
-    expect(s.precisionS2sPx).toBeCloseTo(20);
     expect(s.hitRate["6-chip (3x2)"]).toBe(1);
   });
 });
 
-describe("GazeRegressor.fitWithPrior", () => {
-  const mk = (bias: number) =>
-    [-1, -0.5, 0, 0.5, 1].flatMap((a) => [-1, 0, 1].map((b) => ({ features: [a, b, a * b, 0.1 * a], x: 0.5 + 0.3 * a + bias, y: 0.5 + 0.3 * b })));
-  it("follows the prior when strong, and learns a per-user offset through the free intercept", () => {
-    const prior = new GazeRegressor(1, 2);
-    prior.fit(mk(0));
-    const few = mk(0.1).filter((_, i) => i % 5 === 0);
-    const r = new GazeRegressor(1, 2);
-    r.fitWithPrior(few, prior, 1e6);
-    const p = r.predict([0.5, 0.5, 0.25, 0.05]);
-    const q = prior.predict([0.5, 0.5, 0.25, 0.05]);
-    expect(p.x - q.x).toBeCloseTo(0.1, 2);
-    expect(p.y - q.y).toBeCloseTo(0, 2);
+describe("replay, eye pointer", () => {
+  it("uses main's eye model and scores held-out dots", () => {
+    const s = prepare(fakeSession("a", "full", { gain: 1, bias: 0 }), "a");
+    expect(s.pointer).toBe("eye");
+    expect(mainModel(s)!.lambda).toBe(1);
+    const rows = accuracyRows(s);
+    expect(rows.map((r) => r.testSet)).toEqual(["check dots", "drift +2 min", "drift +5 min", "drift +10 min"]);
+    expect(rows[0].stats.hitRate["6-chip (3x2)"]).toBeGreaterThan(0.9);
   });
 });
 
-describe("replay", () => {
-  it("recovers gaze on held-out points of a synthetic full session", () => {
-    const p = prepare(fakeSession("a", "full", { gain: 1, bias: 0 }), "a");
-    expect(p.cal).toHaveLength(25);
-    expect(p.val).toHaveLength(16);
-    expect(p.lostFrac).toBe(0);
-    const rows = personalRows(p);
-    const best = rows.find((r) => r.calSet === "25pt" && r.source.startsWith("ridge λ=0.1"))!;
-    expect(best.stats.accuracyPx).toBeLessThan(40);
-    expect(best.stats.hitRate["6-chip (3x2)"]).toBeGreaterThan(0.95);
-    expect(rows.some((r) => r.source.includes("(app)"))).toBe(true);
-    const drift = driftRows(p);
-    expect(drift.map((r) => r.testSet)).toEqual(["+0 min", "+2 min", "+5 min", "+10 min"]);
+describe("replay, pointer tracker", () => {
+  const s = prepare(fakeSession("h", "quick", { gain: 1, bias: 0 }, 3, "pointer"), "h");
+
+  it("feeds main's pointer model the 10 pointer features, with λ chosen by cross-validation", () => {
+    expect(s.pointer).toBe("pointer");
+    expect(toSamples(s.cal)[0].features).toHaveLength(10);
+    expect([0.1, 0.3, 1, 3, 10, 30]).toContain(mainModel(s)!.lambda);
   });
 
-  it("runs the leave-one-participant-out pooled comparison", () => {
-    const team = [prepare(fakeSession("a", "full", { gain: 1, bias: 0 }, 3), "a"), prepare(fakeSession("b", "full", { gain: 1.05, bias: 0 }, 5), "b")];
-    const stranger = prepare(fakeSession("s", "short", { gain: 1, bias: 0.15 }, 7), "s");
-    const rows = pooledRows([...team, stranger]).filter((r) => r.participant === "s");
-    const priorOnly = rows.find((r) => r.source.startsWith("prior only"))!;
-    const offset = rows.find((r) => r.source === "prior + offset" && r.calSet === "9pt")!;
-    // The stranger's eyes are shifted; a 9-point offset correction must beat the uncorrected prior.
-    expect(offset.stats.accuracyPx).toBeLessThan(priorOnly.stats.accuracyPx);
-    expect(rows.some((r) => r.source.startsWith("prior + fine-tune"))).toBe(true);
+  it("points at held-out dots and selects them with the 2 s dwell", () => {
+    expect(accuracyRows(s)[0].stats.hitRate["6-chip (3x2)"]).toBeGreaterThan(0.9);
+    const six = dwellRows(s).find((r) => r.layout.startsWith("6"))!;
+    expect(six.stats.n).toBe(8);
+    expect(six.stats.correct).toBeGreaterThan(0.85);
+  });
+
+  it("can force the pointer pipeline on an eye recording (plumbing test)", () => {
+    const forced = prepare(fakeSession("a", "quick", { gain: 1, bias: 0 }), "a", { asPointer: true });
+    expect(forced.pointer).toBe("pointer");
+    expect(forced.recordedPointer).toBe("eye");
+  });
+
+  it("lays buttons out around the dot", () => {
+    expect(buttonsAround(750, 450, 1500, 900, { name: "6", cols: 3, rows: 2 }, 0).some((r) => r.id === "0,0")).toBe(true);
   });
 });

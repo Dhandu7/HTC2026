@@ -63,7 +63,7 @@ npm run dev
 
 Open the app in Chrome, allow webcam access, and complete the 9-point calibration. Sit about 50–70 cm from the screen in even lighting for the best results.
 
-**Fallbacks:** if gaze tracking is unreliable in your lighting, switch to head-pose mode or the keyboard mode in settings. The conversation engine works the same way in both.
+**Fallbacks:** if gaze tracking is unreliable in your lighting, switch to pointer mode or the keyboard mode in settings. The conversation engine works the same way in both.
 
 ## Privacy and safety
 
