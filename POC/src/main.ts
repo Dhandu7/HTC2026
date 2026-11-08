@@ -3,6 +3,7 @@ import { FaceTracker } from "./gaze/tracker";
 import { GazeEngine, type GazePoint } from "./gaze/engine";
 import { estimateDistanceCm, type ErrorStats, type ViewingGeometry } from "./gaze/accuracy";
 import { runCalibration } from "./ui/calibration";
+import { SessionRecorder } from "./metrics/recorder";
 import { BlinkSelector, DwellSelector, TargetTracker, type Rect, type SelectionMode } from "./input/selection";
 import { PredictionEngine } from "./predict/engine";
 import { CORE_WORDS, SEED_PHRASES, BENCHMARK_SENTENCES } from "./predict/vocab";
@@ -37,8 +38,8 @@ interface Settings {
 }
 const DEFAULTS: Settings = {
   selectionMode: "dwell",
-  dwellMs: 700,
-  baselineDwellMs: 1000,
+  dwellMs: 2000,
+  baselineDwellMs: 2000,
   baselinePrediction: false,
   screenDiagonalIn: 14,
   distanceCm: 0,
@@ -83,8 +84,19 @@ function showToast(html: string, ms = 4000) {
 
 // ---------- core objects ----------
 const gaze = new GazeEngine();
+const rec = new SessionRecorder();
+const EYE_FEATURES = ["irisX", "irisY", "lookH", "lookV", "yaw", "pitch", "openness"];
+const HEAD_FEATURES = ["yaw", "pitch", "noseX", "noseY", "noseRelX", "noseRelY", "roll", "faceH", "eyeMidX", "eyeMidY"];
+rec.featureNames = EYE_FEATURES;
 const tracker = new FaceTracker($("#video"));
-tracker.onFrame = gaze.handleFrame;
+// Nose pointer: the same keyboard, fed head features instead of eye features. Eye features are ignored in this mode.
+let nosePointer = false;
+tracker.onFrame = (f) => {
+  if (!f) return gaze.handleFrame(f);
+  const v = f.vector;
+  // Eye mode keeps its original 7 features; nose mode gets 10 head features (see NOSE_FLOOR in engine.ts).
+  gaze.handleFrame({ ...f, vector: nosePointer ? [v[4], v[5], v[7], v[8], v[11], v[12], v[10], v[9], v[13], v[14]] : v.slice(0, 7) });
+};
 const predictor = new PredictionEngine({
   get: (k) => localStorage.getItem(k),
   set: (k, v) => localStorage.setItem(k, v),
@@ -157,6 +169,7 @@ let pendingImplicit: { timer: number } | null = null;
 function applySelection(id: string, t: number) {
   const el = board.querySelector<HTMLElement>(`[data-target="${CSS.escape(id)}"]`);
   const kind = kb.select(id);
+  rec.event("select", { id, kind });
   if (kind === "delete" && pendingImplicit) {
     clearTimeout(pendingImplicit.timer);
     pendingImplicit = null;
@@ -192,6 +205,17 @@ let lastHover: HTMLElement | null = null;
 let hotCornerSince: number | null = null;
 
 function onGaze(g: GazePoint) {
+  if (g.source === "camera" && gaze.dbg.frame) {
+    rec.frame(
+      {
+        phase: calRoot.hidden ? 0 : 1,
+        rawX: gaze.dbg.raw?.x ?? NaN, rawY: gaze.dbg.raw?.y ?? NaN,
+        curX: g.x, curY: g.y, valid: g.valid ? 1 : 0,
+        blinkL: g.blinkL, blinkR: g.blinkR,
+      },
+      gaze.dbg.frame.vector,
+    );
+  }
   if (!expanded) {
     hotCorner(g);
     return;
@@ -217,10 +241,15 @@ function onGaze(g: GazePoint) {
   if (lastHover && lastHover !== el) {
     lastHover.classList.remove("hover");
     lastHover.style.removeProperty("--p");
+    lastHover.removeAttribute("data-count");
   }
   if (el) {
     el.classList.add("hover");
     el.style.setProperty("--p", String(out.progress));
+    // Countdown in seconds while dwelling (2 -> 1).
+    if (settings.selectionMode === "dwell" && out.progress > 0 && out.progress < 1)
+      el.dataset.count = String(Math.ceil((1 - out.progress) * (dwell.dwellMs / 1000)));
+    else el.removeAttribute("data-count");
   }
   lastHover = el;
   if (out.selected) applySelection(out.selected, g.t);
@@ -328,33 +357,44 @@ async function calibrate() {
     showToast("Calibration needs the camera. You're in mouse mode.");
     return;
   }
-  const stats = await runCalibration(gaze, calRoot, geometry);
+  const stats = await runCalibration(
+    gaze,
+    calRoot,
+    geometry,
+    nosePointer ? "Point your nose at each dot by turning your head. Keep going until it disappears." : undefined,
+  );
   if (!stats) {
     showToast("Calibration cancelled or failed.");
     return;
   }
   lastError = stats;
+  rec.event("calibrated", { model: nosePointer ? "head" : "eye", error: stats, samples: gaze.calibrationSamples.length });
   const g = geometry();
+  const weakDir = !(stats.dirX > 0.7 && stats.dirY > 0.7);
   showToast(
-    `<b>Calibrated.</b> Mean error <b>${stats.meanDeg.toFixed(2)}°</b> (${stats.meanPx.toFixed(0)} px), precision ±${stats.precisionDeg.toFixed(
+    `${weakDir ? `<b style="color:#ff7b72">⚠ Direction check failed</b> (pointer follows your target with correlation x ${stats.dirX.toFixed(2)}, y ${stats.dirY.toFixed(2)}; it should be above 0.7). This calibration may move the pointer the wrong way. Press ◎ Calibrate again.<br>` : ""}<b>Calibrated.</b> Mean error <b>${stats.meanDeg.toFixed(2)}°</b> (${stats.meanPx.toFixed(0)} px), precision ±${stats.precisionDeg.toFixed(
       2,
     )}°, n=${stats.n}.<br><small>Assumes ${settings.screenDiagonalIn}" screen at ${g.distanceCm.toFixed(0)} cm${
       settings.distanceCm ? "" : " (estimated from iris size)"
     }. Smallest target here: ${smallestTargetPx()} px.</small>`,
-    9000,
+    weakDir ? 15000 : 9000,
   );
   localStorage.setItem("gazetype.lastError.v1", JSON.stringify(stats));
 }
 
 // ---------- start ----------
-async function startCamera() {
+async function startCamera(nose = false) {
   home.querySelector<HTMLElement>(".home-msg")!.textContent = "Loading face model…";
   try {
+    nosePointer = nose;
+    if (nose) gaze.configureNose();
+    rec.featureNames = nose ? HEAD_FEATURES : EYE_FEATURES;
+    rec.event("start", { model: nose ? "head" : "eye" });
     const where = await tracker.init();
     await tracker.start();
     gaze.source = "camera";
     home.hidden = true;
-    showToast(`Camera on (${where}). Video stays on this device.`);
+    showToast(`${nose ? "Head tracker" : "Eye tracker"} on (${where}). Video stays on this device.`);
     await calibrate();
   } catch (err) {
     home.querySelector<HTMLElement>(".home-msg")!.textContent = `Camera failed: ${(err as Error).message}. Try mouse mode.`;
@@ -368,6 +408,7 @@ function startMouse() {
 }
 
 $("#start-camera").addEventListener("click", () => void startCamera());
+$("#start-nose").addEventListener("click", () => void startCamera(true));
 $("#start-mouse").addEventListener("click", startMouse);
 $("#kb-toggle").addEventListener("click", () => {
   kb = kb === gazeKb ? baseKb : gazeKb;
@@ -377,6 +418,48 @@ $("#kb-toggle").addEventListener("click", () => {
   render();
 });
 $("#recal").addEventListener("click", () => void calibrate());
+$("#export-data").addEventListener("click", () => {
+  const data = rec.toJSON({
+    model: nosePointer ? "head" : "eye",
+    featureNames: rec.featureNames,
+    settings,
+    lastError,
+    calibration: gaze.calibrationSamples.map((s) => ({ f: s.features.map((v) => Math.round(v * 1e5) / 1e5), x: Math.round(s.x), y: Math.round(s.y) })),
+  });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: "application/json" }));
+  a.download = `gazetype-session-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  showToast(`Exported ${rec.frameCount} frames + events. Numbers only, no video.`);
+});
+// Import a nose-pointer calibration made in the other build. Accepts either that app's "Export data" JSON
+// ({calibration: [{f, x, y}], window}) or its saved calibration object ({samples: [{features, x, y}], w, h}).
+$("#import-cal").addEventListener("click", () => {
+  if (gaze.source !== "camera" || !nosePointer) return showToast("Start the head tracker first, then import.");
+  $<HTMLInputElement>("#import-file").click();
+});
+$<HTMLInputElement>("#import-file").addEventListener("change", async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  try {
+    const d = JSON.parse(await file.text());
+    const raw: { f: number[]; x: number; y: number }[] = (d.calibration ?? d.samples ?? []).map((s: { f?: number[]; features?: number[]; x: number; y: number }) => ({ f: s.f ?? s.features ?? [], x: s.x, y: s.y }));
+    const srcW: number = d.window?.w ?? d.w ?? innerWidth;
+    const srcH: number = d.window?.h ?? d.h ?? innerHeight;
+    if (d.model && d.model !== "head") return showToast(`That file is from the "${d.model}" model, not the head tracker.`);
+    if (raw.length < 30 || raw.some((s) => s.f.length !== 10)) return showToast("Not a nose-pointer calibration (expected 10 head features per sample).");
+    // Samples are in screen pixels; rescale if the window size differs from when they were recorded.
+    const sx = innerWidth / srcW;
+    const sy = innerHeight / srcH;
+    gaze.setCalibration(raw.map((s) => ({ features: s.f, x: s.x * sx, y: s.y * sy })));
+    showToast(`Imported ${raw.length} calibration samples${Math.abs(sx - 1) > 0.02 || Math.abs(sy - 1) > 0.02 ? ` (rescaled from ${srcW}x${srcH})` : ""}. Sit as you did when you calibrated.`, 7000);
+  } catch (err) {
+    showToast(`Import failed: ${(err as Error).message}`);
+  }
+});
 $("#settings-btn").addEventListener("click", openSettings);
 $("#bench-btn").addEventListener("click", () => startRun(benchIndex));
 $("#results-btn").addEventListener("click", showResults);

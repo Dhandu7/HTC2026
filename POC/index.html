@@ -14,6 +14,9 @@
           <button id="bench-btn" type="button">⏱ Benchmark</button>
           <button id="results-btn" type="button">📊 Results</button>
           <button id="recal" type="button">◎ Calibrate</button>
+          <button id="export-data" type="button" title="Download this session's numbers (no video) as JSON">⬇ Export data</button>
+          <button id="import-cal" type="button" title="Load a head-tracker calibration exported from the other build">📥 Import calibration</button>
+          <input id="import-file" type="file" accept="application/json,.json" hidden />
           <button id="settings-btn" type="button">⚙</button>
         </nav>
       </header>
@@ -27,7 +30,8 @@
         <h1>GazeType</h1>
         <p>Type with your eyes using any webcam. Prediction-first, large targets, on-device.</p>
         <div class="home-actions">
-          <button id="start-camera" class="primary" type="button">👁 Start with camera</button>
+          <button id="start-camera" class="primary" type="button">👁 Eye tracker</button>
+          <button id="start-nose" type="button">🧭 Head tracker</button>
           <button id="start-mouse" type="button">🖱 Mouse mode (demo / dev)</button>
         </div>
         <p class="home-msg"></p>

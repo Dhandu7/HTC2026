@@ -105,3 +105,11 @@ body.overlay.collapsed #pill span { display: grid; place-items: center; width: 4
 body.overlay.collapsed { background: transparent !important; }
 #target-bar button { margin-left: 12px; background: var(--key); border: 1px solid #30363d; border-radius: 8px; padding: 4px 10px; cursor: pointer; font-size: 14px; }
 body.overlay.collapsed #pill { cursor: pointer; }
+
+/* calibration progress */
+.cal-progress { position: absolute; left: 0; right: 0; bottom: 28px; text-align: center; color: var(--muted); font-size: 18px; }
+.cal-bar { width: min(560px, 70vw); height: 8px; margin: 0 auto 10px; border-radius: 4px; background: #1b222c; overflow: hidden; }
+.cal-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 300ms ease; }
+.cal-msg b { color: var(--text, #e6edf3); }
+/* selection countdown: remaining seconds in the corner of the key you are dwelling on */
+.key[data-count]::before { content: attr(data-count); position: absolute; top: 6px; right: 10px; font-size: clamp(22px, 3vw, 40px); font-weight: 800; color: var(--accent); line-height: 1; z-index: 1; }
