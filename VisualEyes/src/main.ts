@@ -7,6 +7,7 @@ import { BlinkBurstDetector } from "./input/gestures";
 import { POINTER_FEATURE_NAMES, eyeVector, pointerVector } from "./gaze/features";
 import { download, recordSession } from "./record/recorder";
 import { SessionTape } from "./record/tape";
+import { runTargetTest } from "./record/targetTest";
 import type { SessionMeta } from "./record/format";
 import { SessionRecorder } from "./metrics/recorder";
 import { BlinkSelector, DwellSelector, TargetTracker, type Rect, type SelectionMode } from "./input/selection";
@@ -679,7 +680,7 @@ function openRecord() {
     const meta: SessionMeta = {
       participant: String(fd.get("participant") ?? "").trim(),
       pointer: pointerTracking ? "pointer" : "eye",
-      mode: mode === "short" ? "short" : mode === "full" ? "full" : "quick",
+      mode: mode === "short" ? "short" : mode === "full" ? "full" : mode === "target" ? "target" : "quick",
       glasses: fd.get("glasses") === "on",
       lighting: String(fd.get("lighting") ?? ""),
       notes: String(fd.get("notes") ?? ""),
@@ -687,6 +688,20 @@ function openRecord() {
       screenDiagonalIn: g.screenDiagonalIn,
       hfovDeg: settings.hfovDeg,
     };
+    if (meta.mode === "target") {
+      // Closed loop: needs a calibration, then the user steers the visible pointer onto each button.
+      if (!gaze.calibrated) return showToast("Calibrate first, then run the Target test.");
+      const s = await runTargetTest(gaze, tracker, calRoot, { meta, dwellMs: settings.dwellMs });
+      if (!s) return showToast("Target test cancelled; nothing saved.");
+      const id = (meta.participant || "anon").replace(/[^\w-]+/g, "_");
+      download(new Blob([JSON.stringify(s)], { type: "application/json" }), `gazetarget-${meta.pointer}-${id}-${s.createdAt.replace(/[:.]/g, "-")}.json`);
+      const trials = s.targetTest!.trials;
+      const by = (layout: string) => {
+        const t = trials.filter((x) => x.layout.startsWith(layout));
+        return t.length ? `${Math.round((t.filter((x) => x.outcome === "correct").length / t.length) * 100)}% right, ${t.filter((x) => x.outcome === "wrong").length} wrong` : "–";
+      };
+      return showToast(`<b>Target test saved.</b> 6 buttons: ${by("6")} · 4×4 grid: ${by("16")}. Move it to VisualEyes/recordings/ and run npm run replay.`, 12000);
+    }
     const n = await recordSession(gaze, tracker, calRoot, { meta, video: fd.get("video") === "on" });
     showToast(
       n === null

@@ -92,7 +92,8 @@ export function prepare(session: RecordedSession, name: string, opts: PrepareOpt
   session.targets.forEach((t, i) => {
     if (t.segment === "cal") calByKey.set(pointKey(t.fx, t.fy), pts[i]);
     else if (t.segment === "val") val.push(pts[i]);
-    else (drift.get(t.atMin) ?? drift.set(t.atMin, []).get(t.atMin)!).push(pts[i]);
+    else if (t.segment === "drift") (drift.get(t.atMin) ?? drift.set(t.atMin, []).get(t.atMin)!).push(pts[i]);
+    // "target" (closed-loop Target test) trials are scored from session.targetTest, not here.
   });
   return {
     name,
@@ -199,4 +200,46 @@ export function dwellRows(s: PreparedSession): DwellRow[] {
   return modelsFor(s).flatMap(([name, m]) =>
     m ? LAYOUTS.map((layout) => ({ session: s.name, pointer: s.pointer, source: name, layout: layout.name, stats: simulateDwell(dots, m.predict, { ...cfg, layout }) })) : [],
   );
+}
+
+export interface TargetRow {
+  session: string;
+  pointer: PointerMode;
+  layout: string;
+  trials: number;
+  correct: number;
+  wrong: number;
+  timeout: number;
+  /** Median time to a correct selection (ms). */
+  medianTimeMs: number;
+  /** Correct share on the layout's corner buttons. */
+  cornerCorrect: number;
+}
+
+/** Closed-loop Target test results (pointer visible), per layout. */
+export function targetRows(s: PreparedSession): TargetRow[] {
+  const tt = s.session.targetTest;
+  if (!tt) return [];
+  const layouts = [...new Set(tt.trials.map((t) => t.layout))];
+  return layouts.map((layout) => {
+    const t = tt.trials.filter((x) => x.layout === layout);
+    const share = (k: string) => t.filter((x) => x.outcome === k).length / t.length;
+    const times = t.filter((x) => x.outcome === "correct").map((x) => x.timeMs).sort((a, b) => a - b);
+    const [cols, rows] = (layout.match(/\((\d+)x(\d+)\)/) ?? [, "0", "0"]).slice(1).map(Number);
+    const corner = t.filter((x) => {
+      const [c, r] = x.target.split(",").map(Number);
+      return (c === 0 || c === cols - 1) && (r === 0 || r === rows - 1);
+    });
+    return {
+      session: s.name,
+      pointer: s.pointer,
+      layout,
+      trials: t.length,
+      correct: share("correct"),
+      wrong: share("wrong"),
+      timeout: share("timeout"),
+      medianTimeMs: times.length ? times[Math.floor(times.length / 2)] : NaN,
+      cornerCorrect: corner.length ? corner.filter((x) => x.outcome === "correct").length / corner.length : NaN,
+    };
+  });
 }

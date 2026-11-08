@@ -5,7 +5,7 @@ import { extractFeatures, type GazeFeatures, type Pt } from "../gaze/features";
 export const SESSION_FORMAT = "gazetype.session.v1";
 
 /** Which part of the protocol a target belongs to. */
-export type SegmentKind = "cal" | "val" | "drift";
+export type SegmentKind = "cal" | "val" | "drift" | "target";
 
 export interface ProtocolTarget {
   segment: SegmentKind;
@@ -34,7 +34,22 @@ export const SETTLE_MS = 800;
 export const COLLECT_MS = 1500;
 
 /** "calibration" = saved from the app's own ◎ Calibrate (cal points + 4 check points). */
-export type ProtocolMode = "full" | "quick" | "short" | "calibration";
+/** "target" = closed-loop Target test: pointer visible, select highlighted buttons by dwell. */
+export type ProtocolMode = "full" | "quick" | "short" | "calibration" | "target";
+
+/** One Target-test trial: a highlighted button the user steered the visible pointer onto. */
+export interface TargetTrial {
+  layout: string;
+  /** Button the user was asked to select, e.g. "3,1" (column, row), and its centre (viewport fractions). */
+  target: string;
+  fx: number;
+  fy: number;
+  outcome: "correct" | "wrong" | "timeout";
+  /** Button actually selected (null on timeout). */
+  selected: string | null;
+  /** From the button lighting up to the selection (or the timeout). */
+  timeMs: number;
+}
 
 const key = (fx: number, fy: number) => `${fx},${fy}`;
 export const pointKey = key;
@@ -136,6 +151,8 @@ export interface RecordedSession {
   frames: RecordedFrame[];
   /** Wall-clock intervals (performance.now) covered by the local video, in order; null if no video. */
   videoTimeline: { t0: number; t1: number }[] | null;
+  /** Closed-loop Target test results (mode "target"). */
+  targetTest?: { dwellMs: number; timeoutMs: number; trials: TargetTrial[] };
 }
 
 // ---- base64 <-> Float32Array (btoa/atob exist in browsers and in Node) ----

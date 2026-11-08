@@ -5,7 +5,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { SESSION_FORMAT, type RecordedSession } from "../src/record/format";
-import { accuracyRows, dwellRows, prepare, trackingLost, type DwellRow, type ResultRow } from "../src/eval/replay";
+import { accuracyRows, dwellRows, prepare, targetRows, trackingLost, type DwellRow, type ResultRow } from "../src/eval/replay";
 
 const args = process.argv.slice(2);
 const jsonIdx = args.indexOf("--json");
@@ -73,6 +73,38 @@ console.table(
     dots: r.stats.n,
   })),
 );
+
+// Closed-loop Target test files (pointer visible): what using the app feels like.
+const targets = scored.flatMap(targetRows);
+if (targets.length) {
+  console.log("\n## Target test (closed loop: pointer visible, user steers onto each button)");
+  console.table(
+    targets.map((r) => ({
+      session: short(r.session),
+      pointer: r.pointer,
+      layout: r.layout,
+      correct: pct(r.correct),
+      wrong: pct(r.wrong),
+      timeout: pct(r.timeout),
+      "corners correct": pct(r.cornerCorrect),
+      "median time": Number.isFinite(r.medianTimeMs) ? `${(r.medianTimeMs / 1000).toFixed(1)} s` : "–",
+      trials: r.trials,
+    })),
+  );
+  const layouts = [...new Set(targets.map((r) => `${r.pointer}|${r.layout}`))];
+  console.log("Mean across Target-test files:");
+  console.table(
+    layouts.map((k) => {
+      const [pointer, layout] = k.split("|");
+      const t = targets.filter((r) => r.pointer === pointer && r.layout === layout);
+      const m = (f: (r: (typeof t)[number]) => number) => {
+        const v = t.map(f).filter(Number.isFinite);
+        return v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN;
+      };
+      return { pointer, layout, files: t.length, correct: pct(m((r) => r.correct)), wrong: pct(m((r) => r.wrong)), timeout: pct(m((r) => r.timeout)), "corners correct": pct(m((r) => r.cornerCorrect)) };
+    }),
+  );
+}
 
 // Mean across recordings, per pointer mode (each recording weighs equally).
 const mean = (xs: number[]) => {

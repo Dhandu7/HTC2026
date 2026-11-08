@@ -106,3 +106,31 @@ describe("tracking loss", async () => {
     expect(trackingLost(s)).toBe(true);
   });
 });
+
+describe("target test (closed loop)", async () => {
+  const { targetRows } = await import("../src/eval/replay");
+  const { TARGET_LAYOUTS } = await import("../src/record/targetTest");
+  it("tests every corner of the 4x4 grid", () => {
+    const grid = TARGET_LAYOUTS.find((l) => l.cols === 4)!;
+    for (const c of [[0, 0], [3, 0], [0, 3], [3, 3]]) expect(grid.cells).toContainEqual(c);
+  });
+  it("summarises outcomes per layout, including corners", () => {
+    const raw = fakeSession("h", "quick", { gain: 1, bias: 0 }, 3, "pointer");
+    raw.meta.mode = "target";
+    raw.targetTest = {
+      dwellMs: 2000,
+      timeoutMs: 8000,
+      trials: [
+        { layout: "16-grid (4x4)", target: "0,3", fx: 0.125, fy: 0.875, outcome: "wrong", selected: "0,2", timeMs: 3000 },
+        { layout: "16-grid (4x4)", target: "1,1", fx: 0.375, fy: 0.375, outcome: "correct", selected: "1,1", timeMs: 2500 },
+        { layout: "6-chip (3x2)", target: "1,0", fx: 0.5, fy: 0.25, outcome: "correct", selected: "1,0", timeMs: 2200 },
+      ],
+    };
+    const rows = targetRows(prepare(raw, "t"));
+    const grid = rows.find((r) => r.layout.startsWith("16"))!;
+    expect(grid.correct).toBe(0.5);
+    expect(grid.wrong).toBe(0.5);
+    expect(grid.cornerCorrect).toBe(0);
+    expect(rows.find((r) => r.layout.startsWith("6"))!.medianTimeMs).toBe(2200);
+  });
+});
