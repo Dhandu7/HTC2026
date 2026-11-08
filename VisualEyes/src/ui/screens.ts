@@ -30,6 +30,8 @@ export interface ScreensCtx {
   aiStatus(): string;
   /** Listening to the other person: a short status for the Settings row. */
   listenStatus(): string;
+  /** "Delete my data": asks for confirmation, then erases this computer's data and the account's. */
+  eraseData(): void;
 }
 
 export interface Screen {
@@ -186,6 +188,15 @@ export function makeScreens(ctx: ScreensCtx): Record<Exclude<ScreenName, "voice"
             ${row("What the AI knows", "How you talk, your topics and people.", g("s:aiprefs", "Review", { cls: "w", face: "btn" }))}
             ${row("Eye tracking", "Run calibration again if selections feel off.", g("s:recal", "Recalibrate", { cls: "w", face: "btn" }))}
           </div>
+          <div class="card setrow" style="flex:none">
+            <div>
+              <div class="lbl">Your data</div>
+              <div class="hint">On this computer: your profiles, phrases and words learned, calibration, settings and recent messages. Video never leaves it. ${
+                acc.signedIn ? "In your account: your settings and your voice, so they follow you to another computer. " : ""
+              }AI suggestions send text only, never audio or video. Listening uses the browser's speech recognition for the other person and records nothing.</div>
+            </div>
+            <div class="row" style="gap:0;flex:none">${g("s:erase", "Delete my data", { cls: "w", face: "btn" })}</div>
+          </div>
           <div class="card" style="padding:1rem 1.625rem;display:flex;flex-direction:column;gap:.625rem;flex:none">
             <div class="row" style="justify-content:space-between;flex-wrap:wrap">
               <div><div class="lbl" style="font-size:1.375rem">For caretakers</div><div class="hint">${esc(acc.line)} These need a mouse and keyboard.</div></div>
@@ -203,6 +214,7 @@ export function makeScreens(ctx: ScreensCtx): Record<Exclude<ScreenName, "voice"
         if (a === "theme") return ctx.open("theme");
         if (a === "aiprefs") return ctx.aiPrefs();
         if (a === "recal") return ctx.recalibrate();
+        if (a === "erase") return ctx.eraseData();
         if (a === "sp-") st.speechRate = Math.round((st.speechRate - 0.1) * 10) / 10;
         else if (a === "sp+") st.speechRate = Math.round((st.speechRate + 0.1) * 10) / 10;
         else if (a === "vo-") st.volume = Math.max(20, st.volume - 10);

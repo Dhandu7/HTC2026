@@ -29,6 +29,7 @@ import { mountMyVoice } from "./ui/myVoice";
 import { startVoiceCommands } from "./input/voice";
 import { download, recordSession } from "./record/recorder";
 import { Conversation, homeItems } from "./listen/conversation";
+import { eraseLocalData } from "./account/erase";
 import { PartnerListener, type ListenState } from "./listen/partner";
 import type { SessionMeta } from "./record/format";
 import { DEFAULTS, lookClasses, type Settings } from "./settings";
@@ -392,7 +393,40 @@ const screens = makeScreens({
   aiStatus: () =>
     llmOn ? "The AI is connected." : llmStatus().reason === "sign-in" ? "A caretaker signs in to turn the AI on." : "The AI server isn't running, so only word prediction works.",
   listenStatus,
+  eraseData: () =>
+    showSheet({
+      kind: "confirm",
+      title: "Delete everything VisualEyes knows about you?",
+      body: `Profiles, phrases, calibration, settings and recent messages on this computer${account ? ", and your settings and voice in your account" : ""}. This can't be undone.`,
+      yes: "Delete it all",
+      onYes: () => void eraseMyData(),
+    }),
 });
+
+/**
+ * "Delete my data" (Settings, after the confirmation): the account's copy first (the voice at ElevenLabs and in our
+ * service, the synced settings and profile), then everything on this computer, then signed out so nothing is synced
+ * back. Ends on the start screen as a first run.
+ */
+async function eraseMyData() {
+  showToast("Deleting your data…", 10000);
+  listener.stop();
+  if (account) {
+    if (voiceCtl.status()) await voiceCtl.remove().catch(() => false);
+    const t = await token().catch(() => null);
+    if (t) await accountApi.putPreferences(t, { settings: { ...DEFAULTS }, profile: { name: "", about: "", people: [], samples: [] } }).catch(() => {});
+  }
+  prefsChanged = () => {}; // the erased state must not be synced to the account
+  eraseLocalData(localStorage);
+  if (auth && account) {
+    account = null;
+    setTokenProvider(null);
+    setLlmToken(null);
+    await auth.signOut(); // ends the Auth0 session too, then comes back to this page as a first run
+  } else {
+    location.reload();
+  }
+}
 const voiceScreens = makeVoiceScreens({
   controller: voiceCtl,
   toast: showToast,

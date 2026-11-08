@@ -115,6 +115,7 @@ No camera? **Mouse mode** runs the same interface with hover-to-dwell. Developer
 - Learned words, phrases and calibration stay on the device. Only settings and the profile sync when signed in.
 - Partner listening is off by default. When on, Chrome's speech recognition sends the microphone audio to Google to be transcribed. VisualEyes stores no audio.
 - Claude and ElevenLabs receive text only. Voice recordings go to ElevenLabs only after the user agrees to a consent screen, and the voice can be deleted at any time.
+- **Delete my data** (Settings, by gaze) erases everything on the computer and, when signed in, the account's settings and voice, then signs out.
 - A slur filter blocks slurs before anything is spoken.
 - VisualEyes is a communication aid prototype, not a medical device.
 
