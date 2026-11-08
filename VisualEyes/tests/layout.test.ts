@@ -8,8 +8,9 @@ describe("typing grid layout", () => {
   it("keeps ⌫ out of the corners (row 3, column 2) and puts WXYZ in the bottom-left corner", () => {
     const engine = new PredictionEngine(memoryStore(), () => 1_000_000);
     engine.load(["hello"], ["yes"], ["Thank you"]);
-    const host: KeyboardHost = { refresh: () => {}, action: () => {}, overlay: false } as unknown as KeyboardHost;
+    const host = { refresh: () => {}, action: () => {}, overlay: false, profiles: () => [], activeProfileId: () => "" } as unknown as KeyboardHost;
     const kb = new GazeTypeKeyboard(engine, host);
+    kb.select("keyboard"); // the app opens on the home screen; the grid is one step away
     const root = fakeRoot();
     kb.render(root);
     const cells = [...root.innerHTML.matchAll(/<(?:button|div) class="key[^"]*"(?: data-target="([^"]*)")?/g)].map((m) => m[1] ?? "empty");

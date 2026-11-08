@@ -748,6 +748,7 @@ const runs = (): RunResult[] => {
 function startRun(index: number) {
   const target = BENCHMARK_SENTENCES[index % BENCHMARK_SENTENCES.length];
   benchmark = { index, target };
+  gazeKb.useHome = false;
   kb.clear();
   session = new TypingSession(kb.name, gaze.source === "mouse" ? `${settings.selectionMode}+mouse` : settings.selectionMode, target);
   targetBar.hidden = false;
@@ -774,6 +775,7 @@ function finishRun(t: number) {
     8000,
   );
   benchmark = null;
+  gazeKb.useHome = true;
   targetBar.hidden = true;
   kb.clear();
   render();
