@@ -21,13 +21,18 @@ Dedicated eye-tracking communication devices cost thousands of dollars and still
 
 ## Measured results
 
+Measured on **8 Nov 2026** with the pointer tracker. Two testers (able-bodied, no glasses), normal indoor lighting, a Windows laptop with a 14-inch screen at 1680×1050 and its built-in webcam, in Chrome. Dwell was the default 1.5 s. Raw data was replayed with `npm run replay`; the output is in [VisualEyes/docs/replay-results-2026-11-08.json](VisualEyes/docs/replay-results-2026-11-08.json).
+
 | Metric | Result |
 |---|---|
-| Target-hit rate (6-button layout, after calibration) | **[XX]%** |
-| Average gaze error after calibration | **[X.X]°** |
-| Messages per minute, with suggestions vs. letter-by-letter | **[X] vs. [X]** |
+| Target test, 6-button home screen: correct selections (pointer visible, 6 trials per person) | **100%** (2 of 2 testers, 0 wrong, 0 timed out) |
+| Target test, 4×4 keyboard including all four corners (8 trials per person) | **100%** (2 of 2 testers) |
+| Median time to select a button in the target test | **2.3 to 2.9 s** at a 1.5 s dwell |
+| Open-loop hit rate on held-out check dots, 6-button layout (no pointer shown, 7 calibrations) | **62%** of frames on target (16-key grid: 36%) |
+| Open-loop pointing error after calibration (estimated, 7 calibrations) | **2.9°** mean |
+| Messages per minute, suggestions vs. letter-by-letter | not measured yet |
 
-*Measured on [number] testers, [lighting conditions], [laptop model].*
+The target test is what using the app feels like: the user sees the pointer and steers it onto each highlighted button until the dwell selects it. The open-loop numbers measure blind aiming at a dot with no pointer, so they are the floor, not the experience. Every number above is from able-bodied testers.
 
 ## How it works
 
