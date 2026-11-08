@@ -3,6 +3,8 @@
 import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 import { extractFeatures, type GazeFeatures } from "./features";
 
+/** How long to wait for the camera's first picture before giving up. */
+const START_TIMEOUT_MS = 8000;
 const CDN_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/wasm";
 const CDN_MODEL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
@@ -80,7 +82,27 @@ export class FaceTracker {
       audio: false,
     });
     this.video.srcObject = this.stream;
-    await this.video.play();
+    // On macOS a camera can open but send no picture (for example when the app that launched us has no camera
+    // permission); play() then never settles. Give up with a message instead of hanging on "Starting the camera".
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.video.play(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("the camera turned on but sent no picture. On a Mac, check System Settings, Privacy & Security, Camera for the app that started VisualEyes, then try again")),
+            START_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } catch (e) {
+      this.stream?.getTracks().forEach((t) => t.stop());
+      this.stream = null;
+      this.video.srcObject = null;
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
     this.running = true;
     this.loop();
   }
