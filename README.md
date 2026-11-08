@@ -35,15 +35,24 @@ Dedicated eye-tracking communication devices cost thousands of dollars and still
 
 ## How it works
 
+```mermaid
+flowchart LR
+    cam["📷 Webcam"] --> mp["MediaPipe<br/>Face Landmarker"]
+    mp --> head["🧭 Head pointer"]
+    head --> kb["⌨️ Keyboard<br/>dwell to select"]
+    kb --> voice["🗣️ ElevenLabs<br/>your own voice"]
+    voice --> out["🔊 Spoken aloud"]
+    llm["🤖 Claude<br/>reply suggestions"] <-.-> kb
+
+    classDef local fill:#EEF5F6,stroke:#0B4F5C,color:#0B4F5C,stroke-width:2px
+    classDef remote fill:#FFF1EC,stroke:#E4572E,color:#7A2A12,stroke-width:2px
+    classDef result fill:#0B4F5C,stroke:#0B4F5C,color:#FFFFFF,stroke-width:2px
+    class cam,mp,head,kb local
+    class llm,voice remote
+    class out result
 ```
-Webcam → Gaze module (in browser) → {x, y, confidence}
-                                         ↓
-Partner mic → speech-to-text → Conversation UI ← gaze selects a suggestion
-                                    ↓                    ↓
-                       POST /suggest (Claude)     Text-to-speech
-                                    ↓
-              Backend (phrases, messages, mood) → Family dashboard → n8n alerts
-```
+
+Teal runs on the laptop, so video never leaves it. Orange is a cloud service that only receives text.
 
 | Layer | Tech |
 |---|---|
