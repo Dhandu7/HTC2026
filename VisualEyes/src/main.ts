@@ -302,7 +302,7 @@ function onGaze(g: GazePoint) {
   const show = settings.showCursor && g.valid && Number.isFinite(g.x);
   cursor.hidden = !show;
   if (show) {
-    const r = Math.max(14, lastError ? Math.min(lastError.meanPx, 200) : 14);
+    const r = Math.max(8, lastError ? Math.min(lastError.meanPx * 0.4, 50) : 8);
     cursor.style.transform = `translate(${g.x - r}px, ${g.y - r}px)`;
     cursor.style.width = cursor.style.height = `${2 * r}px`;
   }
