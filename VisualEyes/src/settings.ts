@@ -26,6 +26,11 @@ export interface Settings {
   textBig: boolean;
   /** AI sentence suggestions. Word prediction is always on. */
   ai: boolean;
+  /**
+   * Listen to the other person through the microphone and offer replies on the home screen. Off by default:
+   * the browser's speech recognition (Chrome) sends the microphone audio to Google to be transcribed.
+   */
+  listen: boolean;
   confirmClear: boolean;
   speechRate: number;
   /** 0..100 */
@@ -57,6 +62,7 @@ export const DEFAULTS: Settings = {
   reduceMotion: false,
   textBig: false,
   ai: true,
+  listen: false,
   confirmClear: false,
   speechRate: 1,
   volume: 80,

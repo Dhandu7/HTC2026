@@ -28,6 +28,8 @@ export interface ScreensCtx {
   signOut(): void;
   tools(): CaretakerTool[];
   aiStatus(): string;
+  /** Listening to the other person: a short status for the Settings row. */
+  listenStatus(): string;
 }
 
 export interface Screen {
@@ -179,6 +181,7 @@ export function makeScreens(ctx: ScreensCtx): Record<Exclude<ScreenName, "voice"
             ${row("Volume", "How loud your voice is.", stepper("s:vo-", `${st.volume}%`, "s:vo+", st.volume <= 20, st.volume >= 100))}
             ${row("Message text size", "How big your words appear.", g("s:ts:l", "Large", { cls: "w", face: "btn", on: !st.textBig }) + g("s:ts:xl", "Extra large", { cls: "w", face: "btn", on: st.textBig }))}
             ${row("AI suggestions", `Sentence endings in the top row. ${esc(ctx.aiStatus())}`, toggle("s:ai", st.ai))}
+            ${row("Listen to the other person", `Replies to what they say appear on the home screen. Uses the browser's speech recognition: in Chrome the microphone audio goes to Google to be transcribed. ${esc(ctx.listenStatus())}`, toggle("s:listen", st.listen))}
             ${row("Ask before clearing", "A check before a whole message is deleted.", toggle("s:cc", st.confirmClear))}
             ${row("What the AI knows", "How you talk, your topics and people.", g("s:aiprefs", "Review", { cls: "w", face: "btn" }))}
             ${row("Eye tracking", "Run calibration again if selections feel off.", g("s:recal", "Recalibrate", { cls: "w", face: "btn" }))}
@@ -207,6 +210,7 @@ export function makeScreens(ctx: ScreensCtx): Record<Exclude<ScreenName, "voice"
         else if (a === "ts:l") st.textBig = false;
         else if (a === "ts:xl") st.textBig = true;
         else if (a === "ai") st.ai = !st.ai;
+        else if (a === "listen") st.listen = !st.listen;
         else if (a === "cc") st.confirmClear = !st.confirmClear;
         save();
       },

@@ -16,7 +16,7 @@ Dedicated eye-tracking communication devices cost thousands of dollars and still
 - **Built for imperfect tracking.** Large targets, dwell selection (~700 ms) and a prediction-first layout, so a few degrees of error doesn't break the experience.
 - **Conversation-first suggestions.** Claude proposes replies based on who the user is talking to and the topic, so most messages take one selection.
 - **Learns your voice.** Your own phrases, jokes and the names of the people you love get surfaced first over time.
-- **Hears the other side.** The partner's speech is transcribed live so the user can follow the conversation. Replies are spoken aloud with text-to-speech.
+- **Hears the other side.** With "Listen to the other person" on, the partner's speech is transcribed in the browser and Claude proposes replies to it, so answering is one glance. What was heard shows on screen. The microphone is muted while the app speaks, and no audio is stored.
 - **Local support.** Keenable surfaces real accessible activities and ALS support groups in Calgary.
 
 ## Measured results
@@ -39,7 +39,7 @@ The target test is what using the app feels like: the user sees the pointer and 
 ```
 Webcam → Gaze module (in browser) → {x, y, confidence}
                                          ↓
-Partner mic → speech-to-text → Conversation UI ← gaze selects a suggestion
+Partner mic → browser speech-to-text → "reply" task (Claude) → home screen chips ← gaze selects a reply
                                     ↓                    ↓
                        POST /suggest (Claude)     Text-to-speech
                                     ↓

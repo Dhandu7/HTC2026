@@ -39,8 +39,9 @@ export interface LlmStatus {
 let status: LlmStatus = { on: false, reason: "no-server" };
 export const llmStatus = () => status;
 
-/** Live sentence suggestions must be quick or they're useless; expansion is a panel the user waits on. */
-const TIMEOUT_MS = { continue: 2500, expand: 6000 } as const;
+/** Live sentence suggestions must be quick or they're useless; expansion is a panel the user waits on. Replies to
+ * what the partner said arrive while they wait for an answer, so they get a little longer than a chip. */
+const TIMEOUT_MS = { continue: 2500, expand: 6000, reply: 4000 } as const;
 const CACHE_MAX = 100;
 const cache = new Map<string, string[]>();
 
@@ -72,17 +73,21 @@ export async function llmAvailable(refresh = false): Promise<boolean> {
 }
 
 export interface LlmRequest {
-  task: "continue" | "expand";
+  task: "continue" | "expand" | "reply";
   text?: string;
   slots?: string[];
   history?: string[];
   n?: number;
+  /** For "reply": what the conversation partner just said. */
+  heard?: string;
+  /** For "reply": the turns before that, oldest first. */
+  transcript?: { who: "them" | "me"; text: string }[];
 }
 
 export async function llmPredict(body: LlmRequest, signal?: AbortSignal): Promise<string[]> {
   if (!(await llmAvailable())) return [];
   // Cache by what was typed (not history), so deleting back to an earlier point is instant.
-  const key = JSON.stringify([profile?.id, body.task, body.text, body.slots, body.n]);
+  const key = JSON.stringify([profile?.id, body.task, body.text, body.slots, body.n, body.heard]);
   const hit = cache.get(key);
   if (hit) return hit;
   const timeout = AbortSignal.timeout(TIMEOUT_MS[body.task]);

@@ -15,7 +15,7 @@ import { CORE_WORDS, SEED_PHRASES, BENCHMARK_SENTENCES } from "./predict/vocab";
 import { llmAvailable, llmPredict, llmStatus, llmWarm, setLlmProfile, setLlmToken } from "./predict/llm";
 import { splitSentences } from "./predict/engine";
 import { ProfileManager, pickSamples, type Profile } from "./profile/profiles";
-import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost } from "./ui/keyboards";
+import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost, HOME_CHIPS } from "./ui/keyboards";
 import { TypingSession, normalizeText, type RunResult } from "./metrics/session";
 import { VoiceRouter } from "./voice/router";
 import { SystemVoice } from "./voice/system";
@@ -28,6 +28,8 @@ import { Auth0Session, auth0Config, canRedirect, type SignedInUser } from "./acc
 import { mountMyVoice } from "./ui/myVoice";
 import { startVoiceCommands } from "./input/voice";
 import { download, recordSession } from "./record/recorder";
+import { Conversation, homeItems } from "./listen/conversation";
+import { PartnerListener, type ListenState } from "./listen/partner";
 import type { SessionMeta } from "./record/format";
 import { DEFAULTS, lookClasses, type Settings } from "./settings";
 import { bars, brand, esc, g, honeycomb, logo } from "./ui/dom";
@@ -65,6 +67,7 @@ const saveSettings = () => {
   sink.setVolume(settings.volume / 100);
   baseKb.withPrediction = settings.baselinePrediction;
   prefsChanged();
+  syncListener();
   render();
 };
 
@@ -133,6 +136,11 @@ const host: KeyboardHost = {
   benchmarking: () => !!benchmark,
 };
 const gazeKb = new GazeTypeKeyboard(predictor, host);
+// The home screen: the AI's replies to what the partner just said first, then the user's usual phrases.
+gazeKb.homeSource = (n) => {
+  const replies = settings.listen ? convo.replies : [];
+  return homeItems(replies, predictor.topPhrases(n), n).map((t) => (replies.includes(t) ? { text: t, sub: "reply" } : t));
+};
 const baseKb = new BaselineKeyboard(predictor, host, settings.baselinePrediction);
 let kb: GazeTypeKeyboard | BaselineKeyboard = gazeKb;
 
@@ -201,6 +209,9 @@ function say(text: string, record = true) {
   if (!t) return;
   if (containsSlur(t)) return void showToast(SLUR_NOTICE, 3500); // also covers voice commands
   if (record) pushHistory(t);
+  // The microphone would hear this through the speakers: ignore it until the voice has finished.
+  convo.spoke(t);
+  listener.mute((t.split(/\s+/).length * 430 + 2500) / settings.speechRate + 1500);
   const seq = ++sp.seq;
   Object.assign(sp, { phase: "generating", text: t, start: performance.now(), el: 0 });
   sink.resume();
@@ -209,6 +220,10 @@ function say(text: string, record = true) {
   void h.done.then(() => {
     if (sp.seq !== seq) return;
     sp.phase = "idle";
+    // Keep the microphone off for a moment longer: the room may still be echoing.
+    setTimeout(() => {
+      if (sp.seq === seq) listener.unmute();
+    }, 700);
     renderPanel();
   });
   renderPanel();
@@ -257,6 +272,86 @@ function punctuate(text: string): string {
 // ---------- recent messages (per profile, this computer only) ----------
 const HIST_KEY = "visualeyes.history.v1";
 let history: string[] = [];
+
+// ---------- the other side of the conversation: the partner is transcribed, the AI proposes replies ----------
+// What the partner says is heard through the browser's speech recognition (listen/partner.ts), each sentence
+// becomes a turn (listen/conversation.ts), and the AI's replies take over the home screen chips. Off until the
+// user turns "Listen to the other person" on in Settings. The microphone is muted while the app speaks.
+const convo = new Conversation();
+let replyAbort: AbortController | null = null;
+let replySeq = 0;
+const listener = new PartnerListener({
+  onFinal: (text) => {
+    const turn = convo.heard(text);
+    if (!turn) return;
+    void askForReplies(turn.text);
+    render();
+  },
+  onInterim: (text) => {
+    convo.interim = text;
+    if (!screenName && sp.phase === "idle") renderPanel();
+  },
+  onState: (st) => {
+    if (st === "denied") {
+      settings.listen = false;
+      saveSettings();
+      showToast("Microphone access was refused, so listening is off. Allow the microphone in the browser to use it.", 7000);
+    } else if (st === "unsupported") {
+      settings.listen = false;
+      saveSettings();
+      showToast("This browser can't transcribe speech. Chrome or Edge can.", 6000);
+    } else if (st === "error") {
+      settings.listen = false;
+      saveSettings();
+      showToast(
+        listener.lastError === "network"
+          ? "This browser can't reach its speech service, so listening is off. Brave blocks it; Chrome or Edge work."
+          : listener.lastError === "language-not-supported"
+            ? "This browser can't transcribe English speech, so listening is off."
+            : "No microphone was found, so listening is off.",
+        8000,
+      );
+    }
+    if (!appRoot.hidden) renderHeader();
+  },
+});
+async function askForReplies(heard: string) {
+  replyAbort?.abort();
+  const ctrl = (replyAbort = new AbortController());
+  const seq = ++replySeq;
+  if (!llmOn || !settings.ai) return;
+  const transcript = convo.transcript(8).slice(0, -1);
+  const replies = await llmPredict({ task: "reply", heard, transcript, n: HOME_CHIPS }, ctrl.signal);
+  if (seq !== replySeq || convo.latest()?.text !== heard) return;
+  convo.replies = replies;
+  render();
+}
+/** Start or stop listening to match the setting; called whenever settings are saved. */
+function syncListener() {
+  if (settings.listen && listener.state === "off") listener.start();
+  else if (!settings.listen && listener.state !== "off" && listener.state !== "unsupported") {
+    listener.stop();
+    convo.replies = [];
+    convo.interim = "";
+  }
+}
+function listenStatus(): string {
+  switch (listener.state) {
+    case "on":
+    case "muted":
+      return "Listening now.";
+    case "starting":
+      return "Starting the microphone…";
+    case "denied":
+      return "The browser refused the microphone.";
+    case "unsupported":
+      return "Not available in this browser (use Chrome or Edge).";
+    case "error":
+      return listener.lastError === "network" ? "This browser blocks the speech service (use Chrome or Edge)." : "No microphone found.";
+    default:
+      return llmOn && settings.ai ? "" : "Needs AI suggestions on for replies; what they say still shows.";
+  }
+}
 const loadHistory = () => {
   try {
     history = JSON.parse(localStorage.getItem(profiles.keyFor(profiles.active.id, HIST_KEY)) ?? "[]");
@@ -296,6 +391,7 @@ const screens = makeScreens({
   tools: () => caretakerTools(),
   aiStatus: () =>
     llmOn ? "The AI is connected." : llmStatus().reason === "sign-in" ? "A caretaker signs in to turn the AI on." : "The AI server isn't running, so only word prediction works.",
+  listenStatus,
 });
 const voiceScreens = makeVoiceScreens({
   controller: voiceCtl,
@@ -438,12 +534,19 @@ let readTargets = new Set<string>();
 let rectsDirty = true;
 let measuredRoot: HTMLElement | null = null;
 
+/** The dot on the Listen chip: live, muted while the app speaks, or off. */
+function listenDot(): string {
+  const st: ListenState = listener.state;
+  return st === "on" ? " live" : st === "muted" || st === "starting" ? "" : " off";
+}
+
 function renderHeader() {
   const on = (n: ScreenName) => screenName === n;
   topbar.innerHTML = `${brand()}
     <div class="chip" id="track-chip"><i class="ve-dot"></i><span></span></div>
     ${g("u:voice", `<i class="ve-dot${voiceCtl.usable() ? "" : " off"}" style="${voiceCtl.usable() ? "background:var(--brandText)" : ""}"></i><span>Voice: ${voiceName()}</span>`, { face: "nav", faceStyle: "gap:.625rem", on: on("voice") || on("voiceSetup") })}
     <div class="spacer"></div>
+    ${g("u:listen", `<i class="ve-dot${listenDot()}"></i><span>${listener.state === "on" || listener.state === "muted" || listener.state === "starting" ? "Listening" : "Listen"}</span>`, { face: "nav", faceStyle: "gap:.625rem", on: settings.listen })}
     ${g("u:phrases", "Phrases", { face: "nav", on: on("phrases") })}
     ${g("u:access", "Accessibility", { face: "nav", on: on("access") })}
     ${g("u:settings", "Settings", { face: "nav", on: on("settings") || on("theme") })}
@@ -456,7 +559,14 @@ function renderPanel() {
   const text = kb.text();
   const empty = !text.trim() && !(kb === gazeKb && gazeKb.slots.length);
   let line = "";
-  if (sp.phase === "idle")
+  const heard = settings.listen ? convo.latest() : null;
+  if (sp.phase === "idle" && settings.listen && (heard || convo.interim || listener.state === "on"))
+    line = heard || convo.interim
+      ? `<span class="eyebrow">They said</span><span class="heard${heard && !convo.interim ? "" : " interim"}">${esc(convo.interim || heard!.text)}</span>${
+          heard && !convo.interim && convo.replies.length ? `<span class="hint" style="flex:none">Replies are on the home screen.</span>` : ""
+        }`
+      : `<span class="eyebrow">Listening</span><span class="hint">When they speak, replies appear on the home screen.</span>`;
+  else if (sp.phase === "idle")
     line = `<span class="eyebrow">Your message</span><span class="hint">Look at a key and hold for ${(settings.dwellMs / 1000).toFixed(1)} s to select it.</span>`;
   else if (sp.phase === "generating") line = `<div class="hcw">${honeycomb()}</div><span class="lbl" style="font-size:1.375rem">Getting your voice ready…</span>`;
   else
@@ -878,6 +988,15 @@ function uiAction(a: string) {
       return showSheet({ kind: "rest" });
     case "help":
       return showSheet({ kind: "alarm" });
+    case "listen":
+      settings.listen = !settings.listen;
+      saveSettings();
+      return showToast(
+        settings.listen
+          ? "Listening to the other person. Replies to what they say appear on the home screen."
+          : "Stopped listening.",
+        3500,
+      );
   }
 }
 
@@ -1655,7 +1774,7 @@ const onboard = new Onboarding(onboardRoot, {
   profiles: () => profiles.list(),
   activeProfile: () => profiles.active.id,
   switchProfile: (id) => switchProfile(id),
-  statusLines: () => [llmLine, ttsLine],
+  statusLines: () => [llmLine, ttsLine, { on: settings.listen, text: settings.listen ? "Listening to the other person: replies to what they say appear on the home screen." : "Not listening to the other person. Turn it on in Settings to get replies to what they say." }],
   shown: () => {
     appRoot.hidden = true;
     clearHover();
@@ -1688,6 +1807,7 @@ async function boot() {
     /* ignore */
   }
   if (settings.voice) void enableVoice();
+  syncListener();
   if (bridge) showToast(`Toggle: ${esc(bridge.shortcut)} · say “gaze type” · or look at the top-right corner`, 5000);
   updateStatus();
 }
