@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" width="1280" height="320" role="img" aria-labelledby="title">
+  <title id="title">VisualEyes: speak with your eyes</title>
+  <clipPath id="card"><rect width="1280" height="320" rx="28"/></clipPath>
+  <g clip-path="url(#card)">
+  <rect width="1280" height="320" fill="#EEF5F6"/>
+  <rect x="0" y="310" width="1280" height="10" fill="#0B4F5C"/>
+  <rect x="0" y="310" width="230" height="10" fill="#E4572E"/>
+  </g>
+  <svg x="230.9" y="44" width="818.2" height="158.7" viewBox="0 0 1319.6 256">
+  <g id="symbol" transform="translate(-8 0)">
+  <path id="bubble" fill="#0B4F5C" fill-rule="evenodd" d="M24 108 A112.26 112.26 0 0 1 232 108 A112.26 112.26 0 0 1 150.0 175.82 L45.56 217.88 L62 156.55 A112.26 112.26 0 0 1 24 108 Z M96 108 A38 38 0 1 0 172 108 A38 38 0 1 0 96 108 Z"/>
+  <path id="pupil" fill="#E4572E" d="M121 108 A17 17 0 1 0 155 108 A17 17 0 1 0 121 108 Z"/>
+  </g>
+  <g id="wordmark" fill="#0B4F5C" transform="translate(264 4.96) scale(0.92)">
+    <path fill-rule="nonzero" transform="translate(0 0)" d="M0.71 17.24 L51.71 165.24 A13 13 0 0 0 76.29 156.76 L25.29 8.76 A13 13 0 0 0 0.71 17.24 Z"/>
+    <path fill-rule="nonzero" transform="translate(0 0)" d="M76.29 165.24 L127.29 17.24 A13 13 0 0 0 102.71 8.76 L51.71 156.76 A13 13 0 0 0 76.29 165.24 Z"/>
+    <path fill-rule="nonzero" transform="translate(140 0)" d="M0 65 L0 159 A13 13 0 0 0 26 159 L26 65 A13 13 0 0 0 0 65 Z"/>
+    <path fill-rule="nonzero" transform="translate(140 0)" d="M-2 20 A15 15 0 1 0 28 20 A15 15 0 1 0 -2 20 Z"/>
+    <path fill-rule="nonzero" transform="translate(188 0)" d="M49 125 A49 37.5 0 1 1 87.61 64.41 A13 13 0 0 1 67.12 80.42 A23 11.5 0 1 0 49 99 A13 13 0 0 1 49 125 Z"/>
+    <path fill-rule="nonzero" transform="translate(188 0)" d="M49 99 A49 37.5 0 1 1 10.39 159.59 A13 13 0 0 1 30.88 143.58 A23 11.5 0 1 0 49 125 A13 13 0 0 1 49 99 Z"/>
+    <path fill-rule="nonzero" transform="translate(306 0)" d="M0 65 L0 112 L26 112 L26 65 A13 13 0 0 0 0 65 Z"/>
+    <path fill-rule="nonzero" transform="translate(306 0)" d="M0 112 A62 62 0 0 0 124 112 L98 112 A36 36 0 0 1 26 112 Z"/>
+    <path fill-rule="nonzero" transform="translate(306 0)" d="M98 65 L98 159 A13 13 0 0 0 124 159 L124 65 A13 13 0 0 0 98 65 Z"/>
+    <path fill-rule="evenodd" transform="translate(452 0)" d="M0 112 A62 62 0 1 0 124 112 A62 62 0 1 0 0 112 Z M26 112 A36 36 0 1 0 98 112 A36 36 0 1 0 26 112 Z"/>
+    <path fill-rule="nonzero" transform="translate(452 0)" d="M98 65 L98 159 A13 13 0 0 0 124 159 L124 65 A13 13 0 0 0 98 65 Z"/>
+    <path fill-rule="nonzero" transform="translate(604 0)" d="M0 9 L0 159 A13 13 0 0 0 26 159 L26 9 A13 13 0 0 0 0 9 Z"/>
+    <path fill-rule="nonzero" transform="translate(656 0)" d="M0 13 L0 159 A13 13 0 0 0 26 159 L26 13 A13 13 0 0 0 0 13 Z"/>
+    <path fill-rule="nonzero" transform="translate(656 0)" d="M13 26 L91 26 A13 13 0 0 0 91 0 L13 0 A13 13 0 0 0 13 26 Z"/>
+    <path fill-rule="nonzero" transform="translate(656 0)" d="M13 99 L82 99 A13 13 0 0 0 82 73 L13 73 A13 13 0 0 0 13 99 Z"/>
+    <path fill-rule="nonzero" transform="translate(656 0)" d="M13 172 L91 172 A13 13 0 0 0 91 146 L13 146 A13 13 0 0 0 13 172 Z"/>
+    <path fill-rule="nonzero" transform="translate(774 0)" d="M0.94 69.84 L38.66 163.84 A13 13 0 0 0 62.79 154.16 L25.06 60.16 A13 13 0 0 0 0.94 69.84 Z"/>
+    <path fill-rule="nonzero" transform="translate(774 0)" d="M93.74 58.5 L29.08 170.5 A13 13 0 0 0 51.6 183.5 L116.26 71.5 A13 13 0 0 0 93.74 58.5 Z"/>
+    <path fill-rule="nonzero" transform="translate(895 0)" d="M94.85 164.58 A62 62 0 1 1 124 112 A13 13 0 0 1 98 112 A36 36 0 1 0 81.08 142.53 A13 13 0 0 1 94.85 164.58 Z"/>
+    <path fill-rule="nonzero" transform="translate(895 0)" d="M13 125 L111 125 A13 13 0 0 0 111 99 L13 99 A13 13 0 0 0 13 125 Z"/>
+    <path fill-rule="nonzero" transform="translate(1032 0)" d="M49 125 A49 37.5 0 1 1 87.61 64.41 A13 13 0 0 1 67.12 80.42 A23 11.5 0 1 0 49 99 A13 13 0 0 1 49 125 Z"/>
+    <path fill-rule="nonzero" transform="translate(1032 0)" d="M49 99 A49 37.5 0 1 1 10.39 159.59 A13 13 0 0 1 30.88 143.58 A23 11.5 0 1 0 49 125 A13 13 0 0 1 49 99 Z"/>
+  </g>
+</svg>
+  <text x="640" y="248" text-anchor="middle" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="30" fill="#0B4F5C">Type with your eyes or head. Speak in your own voice.</text>
+</svg>

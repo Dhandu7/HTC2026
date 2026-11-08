@@ -83,7 +83,7 @@ def create_hosted_app(
     speak_per_minute: int = 60,
     users=None,
 ) -> FastAPI:
-    app = FastAPI(title="VocalEyes hosted voice", version=__version__, docs_url=None, redoc_url=None)
+    app = FastAPI(title="VisualEyes hosted voice", version=__version__, docs_url=None, redoc_url=None)
     limiter = RateLimiter(speak_per_minute)
     if cors_origins:
         app.add_middleware(

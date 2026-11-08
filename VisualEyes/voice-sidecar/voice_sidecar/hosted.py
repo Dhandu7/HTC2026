@@ -32,7 +32,7 @@ CONSENT_TEXT = [
     "This is my own voice, or the voice owner has given me permission to clone it.",
     "My recordings will be sent to ElevenLabs, a third-party service, to create a voice. The text I speak is also sent to ElevenLabs to make the audio.",
     "ElevenLabs may keep generated audio in its history. Zero-retention mode is offered by ElevenLabs only to enterprise customers.",
-    "I can delete this voice at any time. VocalEyes asks ElevenLabs to delete it and removes its own record; anything ElevenLabs has already stored is covered by ElevenLabs' own policies.",
+    "I can delete this voice at any time. VisualEyes asks ElevenLabs to delete it and removes its own record; anything ElevenLabs has already stored is covered by ElevenLabs' own policies.",
     "Speech made with this voice is AI-generated and will be labelled that way.",
 ]
 

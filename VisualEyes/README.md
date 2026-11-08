@@ -1,4 +1,4 @@
-# VocalEyes
+# VisualEyes
 
 A webcam-only, hands-free communicator for people who can't use their hands or voice. It uses a webcam **pointer tracker** (no special hardware) and runs on any laptop. It opens on six large ready-to-speak phrases, typing is prediction-first, targets are large enough for webcam error, and all vision processing stays on the device.
 
@@ -53,7 +53,7 @@ webcam ─► MediaPipe Face Landmarker (478 landmarks + blendshapes + face pose
 | Accuracy units | `src/gaze/accuracy.ts` | Converts px to degrees. Viewing distance is estimated from iris size (11.7 mm) and can be overridden. |
 | Selection | `src/input/selection.ts` | **Dwell** (2 s by default, set in ⚙ Settings). **Deliberate blink** (dwell-free) needs both eyes closed for 350–1500 ms after aiming for at least 150 ms. Involuntary blinks are **counted and reported**, not hidden. |
 | Home | `src/ui/keyboards.ts` | The app opens on **6 large chips (3×2)**: 5 ready-to-speak phrases (one selection speaks a message) and **⌨ Keyboard**, which opens the 4×4 grid. Recorded pointer sessions hit 6 large buttons far more often than the 16-key grid (mean 59% vs 32%). Phrases come from a pluggable source (`homeSource`) so the conversation engine can supply replies. **🗑 Clear** (top bar, or ☰ Done → 🏠 Home) clears the text and returns here. Benchmarks skip it. |
-| Keyboard | `src/ui/keyboards.ts` | The VocalEyes keyboard has **16 targets in a 4×4 grid**: 4 prediction chips, 8 letter-group keys, delete, accept, phrases/expand, and done. The baseline is a dwell QWERTY. |
+| Keyboard | `src/ui/keyboards.ts` | The VisualEyes keyboard has **16 targets in a 4×4 grid**: 4 prediction chips, 8 letter-group keys, delete, accept, phrases/expand, and done. The baseline is a dwell QWERTY. |
 | Prediction | `src/predict/engine.ts` | Decodes ambiguous letter-group keys through a **key-sequence index** (one bucket lookup per key, ~0.4 ms), completes words, and predicts the next word from personal **trigram → bigram** context. Personal and global frequencies are blended, with the personal share growing as the user talks; personal words decay over 30 days; a suggestion picked and deleted within 2 s is ranked lower in that context. Keeps a **personal phrase store** that learns every sentence you speak or insert. **Abbreviation expansion** turns one key per word into a full sentence. |
 | Profiles | `src/profile/profiles.ts` | Each user has separate words, phrases and calibration. A caregiver can add **people's names** (pinned, keep their capitals), an **about** note, and **writing samples** (pasted text or a .txt file) that give prediction a head start. Switch user by gaze from **☰ Done → 👤 Switch user**. Export/import a profile as JSON. All on-device. |
 | LLM (optional) | `server/llm.ts` | Claude via a local proxy with structured output. Live sentence chips use a fast model (`GAZETYPE_FAST_MODEL`, default `claude-haiku-5-5`, no thinking); the abbreviation-expansion panel uses `GAZETYPE_MODEL` (default `claude-opus-5-5`). The profile goes in a cached system block so suggestions match the user's style. Requests are debounced 150 ms, cancelled when the text changes, cached by typed text, and time out after 2.5 s (6 s for expansion). Only text is sent, never video. |
@@ -83,7 +83,7 @@ A webcam pointer can't hit a 26-key QWERTY on a laptop screen reliably; large ta
 ## Demo script (side-by-side)
 
 1. **Calibrate** (about 25 s). Read out the measured error in degrees and the stated conditions.
-2. Turn on **⏱ Benchmark**. Type the target sentence on the **VocalEyes** keyboard.
+2. Turn on **⏱ Benchmark**. Type the target sentence on the **VisualEyes** keyboard.
 3. Toggle **Keyboard → Baseline QWERTY**. The same sentence stays loaded. Type it again.
 4. Open **📊 Results**. Compare WPM, selections per character, error and false selections. **Export JSON** for the slide.
 5. Type a sentence and speak it. Then start it again: it now comes back as a **phrase chip** after one word, so the store is learning.

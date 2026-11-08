@@ -248,7 +248,7 @@ export function mountMyVoice(d: MyVoiceDeps): { open(): void } {
   function noneView(): Node[] {
     const ready = form.ack && form.remoteAck && files.length > 0 && (form.mode === "self" || form.authorizedBy.trim().length > 0);
     return [
-      h("p", {}, "Create a voice that sounds like you from your own recordings. When you speak, VocalEyes uses it, and falls back to the standard voice if it is not available."),
+      h("p", {}, "Create a voice that sounds like you from your own recordings. When you speak, VisualEyes uses it, and falls back to the standard voice if it is not available."),
       consentCard(),
       clipsCard(),
       h(
@@ -308,7 +308,7 @@ export function mountMyVoice(d: MyVoiceDeps): { open(): void } {
       "section",
       { class: "mv-card" },
       h("h3", {}, "Your voice"),
-      h("p", {}, v.status === "paused" ? "⏸ Paused: VocalEyes uses the standard voice." : v.needsVerification ? "⏳ Created, waiting for verification: VocalEyes uses the standard voice for now." : "✅ Active: VocalEyes speaks in it."),
+      h("p", {}, v.status === "paused" ? "⏸ Paused: VisualEyes uses the standard voice." : v.needsVerification ? "⏳ Created, waiting for verification: VisualEyes uses the standard voice for now." : "✅ Active: VisualEyes speaks in it."),
       h("p", { class: "fine" }, `${v.clips.length} recording${v.clips.length === 1 ? "" : "s"} used · ${secs.toFixed(0)} s · consent: ${v.consent.mode === "authorized" ? `permission from ${v.consent.authorizedBy ?? "the voice owner"}` : "own voice"}${v.consent.acknowledgedAt ? ` on ${new Date(v.consent.acknowledgedAt).toLocaleDateString()}` : ""}`),
       h("button", { type: "button", disabled: state.busy, onclick: () => void controller.setPaused(v.status === "active") }, v.status === "active" ? "Pause my voice" : "Resume my voice"),
       form.deleting

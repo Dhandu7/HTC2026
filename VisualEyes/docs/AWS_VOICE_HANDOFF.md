@@ -4,7 +4,7 @@ Written 7 Nov 2026. Branch `voice/openvoice-engine` (the name is historical; the
 
 ## 1. What this is, in one minute
 
-VocalEyes users can create a voice from their own recordings and have the app speak in it. **ElevenLabs does the cloning and the speech** (their servers). What ElevenLabs does not know is *who our users are*. All voices live in one ElevenLabs account under one API key, so anyone holding that key can speak in any voice. We therefore need our own per-user records:
+VisualEyes users can create a voice from their own recordings and have the app speak in it. **ElevenLabs does the cloning and the speech** (their servers). What ElevenLabs does not know is *who our users are*. All voices live in one ElevenLabs account under one API key, so anyone holding that key can speak in any voice. We therefore need our own per-user records:
 
 - which user owns which ElevenLabs `voice_id` (and that no user can reach another's),
 - the consent each user gave,
