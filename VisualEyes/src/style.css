@@ -233,6 +233,13 @@ body.textbig #output .msg{font-size:4.25rem}
 /* Status dot. Namespaced and fully pinned: browser extensions inject their own ".dot" rules (absolute, 3 px). */
 .ve-dot{position:static !important;display:inline-block !important;width:.875rem !important;height:.875rem !important;margin:0 !important;border-radius:50%;background:var(--ok);flex:none;transform:none !important}
 .ve-dot.bad{background:var(--bad)} .ve-dot.off{background:var(--faint)}
+.ve-dot.live{background:var(--coral);animation:livedot 1.4s ease-in-out infinite}
+@keyframes livedot{50%{opacity:.35}}
+body.rm .ve-dot.live{animation:none}
+/* What the other person said, on the message panel's top line. */
+.spline .heard{font-size:1.5rem;font-weight:800;color:var(--capText);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;quotes:"\201C" "\201D"}
+.spline .heard::before{content:open-quote} .spline .heard::after{content:close-quote}
+.spline .heard.interim{color:var(--mute);font-weight:700}
 .card{background:var(--surface);border:2px solid var(--line);border-radius:1.75rem;padding:1.375rem 1.625rem}
 .card h2{margin:0 0 .375rem;font-size:1.75rem;font-weight:900;letter-spacing:-.3px}
 .card p{margin:0;font-size:1.25rem;line-height:1.35;color:var(--mute);font-weight:600}
@@ -436,6 +443,9 @@ body.keybig #output .msg{font-size:3rem}
 /* ---------- keyboard home screen: 5 phrases + Keyboard, 3x2. Extra row gap: vertical pointing is the weak axis ---------- */
 .tray.home{grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));row-gap:1.5rem}
 .tray.home .k.phr{font-size:2.125rem}
+.tray.home .k.phr.long{font-size:1.75rem}
+.tray.home .k.phr.xlong{font-size:1.5rem}
+.tray.home .k.phr.ai small{color:var(--brandText)}
 
 /* ---------- target test (closed loop): a button grid, one highlighted goal, and the live pointer ---------- */
 #calibration.target-test{display:flex;flex-direction:column;padding:.75rem;gap:.75rem}

@@ -3,13 +3,16 @@
 //
 //   ANTHROPIC_API_KEY=... npm run llm
 //
-// Two tasks:
+// Three tasks:
 //   - "continue": suggest full continuations of the sentence typed so far. Shown live
 //                 while typing, so it uses a fast model (GAZETYPE_FAST_MODEL).
 //   - "expand":   SpeakFaster-style abbreviation expansion. The user types one
 //                 letter-group per word (e.g. [ghi][jkl][mno]); we ask for sentences
 //                 whose word initials fit, then re-validate locally. The user opens a
 //                 panel and waits for this, so it uses the stronger model (GAZETYPE_MODEL).
+//   - "reply":    the conversation partner just said something (transcribed in the browser,
+//                 src/listen/partner.ts); suggest short replies in the user's voice. They go
+//                 on the home screen, so one glance answers. Fast model.
 //
 // The user's profile (about, people, sample sentences) goes in a cached system block,
 // so suggestions sound like them and repeat requests reuse the cached prompt.
@@ -24,6 +27,7 @@ import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { fileURLToPath } from "node:url";
 import { elevenModel, elevenSpeak, voiceConfigured } from "./elevenlabs";
 import { containsSlur, stripSlurs } from "../src/safety/slurs";
+import { filterReplies } from "../src/listen/conversation";
 
 // Load VisualEyes/.env (ANTHROPIC_API_KEY etc.). Variables already set in the shell win.
 try {
@@ -50,8 +54,11 @@ const Profile = z.object({
 });
 
 const Request = z.object({
-  task: z.enum(["continue", "expand"]),
+  task: z.enum(["continue", "expand", "reply"]),
   text: z.string().max(2000).default(""),
+  /** For "reply": what the partner just said, and the turns before it (oldest first). */
+  heard: z.string().max(500).default(""),
+  transcript: z.array(z.object({ who: z.enum(["them", "me"]), text: z.string().max(300) })).max(10).default([]),
   /** For "expand": allowed letters for each word's first letter. */
   slots: z.array(z.string().max(26)).max(20).default([]),
   /** Recent sentences the user said — personal style/context. */
@@ -68,6 +75,13 @@ Rules:
 - Order suggestions from most to least likely, and make them clearly different from each other.
 - Fit the person's life as described (who they live with, what they can do, what they care about). Use only the names you are given; never invent people.
 - Return only the suggestions, no commentary.`;
+
+const REPLY_SYSTEM = `You help a person who cannot speak or use their hands take part in a conversation. They communicate with an eye-gaze keyboard, so every selection costs effort: you propose short replies they can say with one glance. The other person's words come from live speech recognition and may contain small transcription mistakes; read for the meaning.
+Rules:
+- Write in the first person, as the user, in their voice: match the spelling, warmth, humour and sentence length their writing samples show. Use only the names you are given; never invent people or facts about the user.
+- Each reply answers what was just said. Keep replies short: 1 to 10 words, never more than 14.
+- Make the replies clearly different from each other: cover the likely answers (for example yes, no, a question back, a need or a feeling), most likely first. Do not offer the same answer in two wordings.
+- Natural spoken sentences, with normal capitalisation and punctuation. No commentary and no quotation marks.`;
 
 /**
  * Profile block. It must be byte-identical between requests for the same profile, or the
@@ -91,6 +105,12 @@ function prompt(r: z.infer<typeof Request>): string {
   if (r.task === "continue") {
     return `${hist}The user has typed: "${r.text}"\nSuggest ${r.n + EXTRA} different likely ways to finish this sentence, most likely first. Each suggestion must be the complete sentence, starting with exactly the words already typed.`;
   }
+  if (r.task === "reply") {
+    const turns = r.transcript.length
+      ? `The conversation so far (oldest first):\n${r.transcript.map((t) => `${t.who === "me" ? "User" : "Other person"}: ${t.text}`).join("\n")}\n\n`
+      : "";
+    return `${turns}The other person just said: "${r.heard}"\nSuggest ${r.n + EXTRA} different short replies the user is most likely to give, most likely first.`;
+  }
   const pattern = r.slots.map((s, i) => `word ${i + 1} starts with one of: ${s.split("").join(" ")}`).join("\n");
   return `${hist}The user typed an abbreviation: one key per word, where each key stands for a group of letters.\n${pattern}\nSuggest ${r.n} different likely sentences with exactly ${r.slots.length} words that fit this pattern${r.text ? `, continuing after: "${r.text}"` : ""}.`;
 }
@@ -109,13 +129,14 @@ const initialsFit = (s: string, slots: string[]) => {
 };
 
 async function predict(r: z.infer<typeof Request>): Promise<{ suggestions: string[]; model: string; cachedTokens: number }> {
-  const model = r.task === "continue" ? FAST_MODEL : MODEL;
+  const model = r.task === "expand" ? MODEL : FAST_MODEL;
   const fast = model.startsWith("claude-haiku");
   // Slurs are blocked: never sent to the model as context, never returned as a suggestion.
-  if (containsSlur(r.text)) return { suggestions: [], model, cachedTokens: 0 };
+  if (containsSlur(r.text) || containsSlur(r.heard)) return { suggestions: [], model, cachedTokens: 0 };
   r = {
     ...r,
     history: r.history.filter((h) => !containsSlur(h)),
+    transcript: r.transcript.filter((t) => !containsSlur(t.text)),
     profile: r.profile && {
       ...r.profile,
       about: stripSlurs(r.profile.about),
@@ -124,7 +145,7 @@ async function predict(r: z.infer<typeof Request>): Promise<{ suggestions: strin
     },
   };
   const pb = r.profile ? profileBlock(r.profile) : "";
-  const system: Anthropic.Beta.BetaTextBlockParam[] = [{ type: "text", text: SYSTEM }];
+  const system: Anthropic.Beta.BetaTextBlockParam[] = [{ type: "text", text: r.task === "reply" ? REPLY_SYSTEM : SYSTEM }];
   // Cache the whole system prefix (instructions + profile). Short prefixes simply don't cache.
   if (pb) system.push({ type: "text", text: pb, cache_control: { type: "ephemeral" } });
 
@@ -148,6 +169,8 @@ async function predict(r: z.infer<typeof Request>): Promise<{ suggestions: strin
   const known = new Set([...(r.profile?.samples ?? []), ...r.history].map(norm));
   const typed = r.text.trim().toLowerCase();
   const clean = out.filter((s) => !containsSlur(s));
+  // A reply that just repeats the question back is a wasted chip.
+  if (r.task === "reply") return { suggestions: filterReplies(out, { n: r.n, known: [r.heard], blocked: containsSlur }), model, cachedTokens };
   const valid =
     r.task === "expand"
       ? clean.filter((s) => initialsFit(s, r.slots))

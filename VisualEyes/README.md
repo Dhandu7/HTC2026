@@ -61,6 +61,7 @@ webcam ─► MediaPipe Face Landmarker (478 landmarks + blendshapes + face pose
 | Metrics | `src/metrics/session.ts` | WPM ((T−1)/5), selections per character, minimum-string-distance error, and likely false selections (an undo within 2 s). |
 | Overlay | `electron/main.mjs` | Transparent, click-through when collapsed, non-focusable so the target app keeps focus. Global shortcut, tray menu, and paste via the OS. |
 | Voice | `src/input/voice.ts` | Vosk wasm with a fixed grammar ("gaze type", "open/hide keyboard", "read it out"). Works offline, and other speech can't trigger it. |
+| Listening | `src/listen/partner.ts`, `src/listen/conversation.ts` | **Listen to the other person** (Settings, or the Listen chip in the top bar; off by default). The partner's speech is transcribed with the browser's speech recognition (Chrome and Edge; Chrome sends the microphone audio to Google to be transcribed, which the setting says). Each finished sentence goes to the AI as a **"reply"** task with the user's profile and the last few turns, and the replies (up to 5, in the user's voice) take over the home screen chips, marked "reply", so one glance answers. The panel shows what was heard. The microphone is muted while the app speaks and anything that matches what it just said is dropped as an echo. No audio is stored. |
 
 ### Recording and replaying sessions
 

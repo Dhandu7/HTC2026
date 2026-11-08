@@ -56,6 +56,8 @@ type Panel = "home" | "main" | "phrases" | "menu" | "profiles" | "numbers" | { l
  * (mean 59% vs 32% of frames), so the grid is the fallback, one selection away.
  */
 export const HOME_CHIPS = 5;
+/** A home-screen chip: plain text, or text with a small label under it. */
+export type HomeItem = string | { text: string; sub: string };
 
 /** Longer chip text gets a smaller font so it fits the target instead of being cut off. */
 const chipSize = (label: string) => (label.length > 34 ? " xlong" : label.length > 16 ? " long" : "");
@@ -77,9 +79,10 @@ export class GazeTypeKeyboard implements Keyboard {
   private panel: Panel = "home";
   /**
    * Phrases on the home screen. A provider so the conversation engine can supply replies to
-   * what the partner said; defaults to the user's most-used phrases.
+   * what the partner said (listen/conversation.ts); defaults to the user's most-used phrases.
+   * An item with `sub` shows that label under the text (e.g. "reply" for an AI reply).
    */
-  homeSource: (n: number) => string[] = (n) => this.engine.topPhrases(n);
+  homeSource: (n: number) => HomeItem[] = (n) => this.engine.topPhrases(n);
   private homeItems: string[] = [];
 
   get onHome() {
@@ -219,10 +222,11 @@ export class GazeTypeKeyboard implements Keyboard {
     root.className = "tray";
     const p = this.panel;
     if (p === "home") {
-      this.homeItems = this.homeSource(HOME_CHIPS);
-      const items = this.homeItems.slice(0, HOME_CHIPS);
+      const src = this.homeSource(HOME_CHIPS).slice(0, HOME_CHIPS);
+      const items = src.map((it) => (typeof it === "string" ? { text: it, sub: "speak" } : it));
+      this.homeItems = items.map((it) => it.text);
       root.innerHTML =
-        items.map((t, i) => key(`home:${i}`, t, "phr", "speak", { read: true })).join("") +
+        items.map((it, i) => key(`home:${i}`, it.text, `phr${it.sub === "reply" ? " ai" : ""}${chipSize(it.text)}`, it.sub, { read: true })).join("") +
         Array.from({ length: HOME_CHIPS - items.length }, blank).join("") +
         key("keyboard", "Keyboard", "fn", "type something new");
       root.className = "tray home";
