@@ -1,4 +1,4 @@
-// Grid calibration (25 points by default, ~1 min) + 4-point validation. Validation
+// Grid calibration (25 points by default, ~1 min) + 8-point validation. Validation
 // reports accuracy in degrees (with the assumptions shown) and, because the viewing
 // distance is unknown in a demo, the distance-free hit rate for 6-chip / 16-grid layouts.
 //
@@ -26,8 +26,11 @@ export function calibrationPoints(size: CalibrationSize): [number, number][] {
   return GRID_25.filter(([x, y]) => IS_9(x, y) || (size === 13 && IS_INNER_4(x, y)));
 }
 
+// Check points: 4 inner + 4 near the edges (never on a calibration dot). The edge ones
+// matter because recorded sessions showed the worst (vertical) errors near the bottom.
 const VAL_POINTS: [number, number][] = [
   [0.3, 0.3], [0.7, 0.3], [0.3, 0.7], [0.7, 0.7],
+  [0.185, 0.2], [0.815, 0.2], [0.185, 0.8], [0.815, 0.8],
 ];
 // Settle raised from 650 ms: the eyes and head are still moving onto the dot early on.
 const SETTLE_MS = 1000;

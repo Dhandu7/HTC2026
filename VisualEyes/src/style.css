@@ -36,6 +36,11 @@ button { font: inherit; color: inherit; }
 .board { display: grid; gap: var(--gap); min-height: 0; flex: 1; }
 .board.gazetype { grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(4, 1fr); }
 .board.gazetype.panel2x4 { grid-template-rows: repeat(2, 1fr); }
+/* Home: 6 large chips. Extra row gap because webcam gaze is weakest vertically. */
+.board.gazetype.home { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); row-gap: calc(var(--gap) * 3); }
+.key.home-chip { background: var(--phrase); }
+.key.home-chip.ctrl { background: #18212c; }
+.key.home-chip .lbl { font-size: clamp(20px, 2.6vw, 38px); letter-spacing: 0; font-weight: 600; }
 .board.gazetype.panel-letters { grid-template-columns: repeat(5, 1fr); grid-template-rows: 1fr; }
 .board.baseline { grid-template-rows: repeat(auto-fit, minmax(0, 1fr)); }
 .board.baseline .row { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }

@@ -30,6 +30,39 @@ export interface GazePoint {
    * where it was during calibration (position, distance or rotation). Mouse = 1.
    */
   confidence: number;
+  /**
+   * The estimate fell off the screen (x/y are then pinned to the nearest edge). Nothing should
+   * be selected from such a point: it would land on an edge key the user isn't looking at.
+   * (From Adeeb's LLM-and-text-modelling branch.)
+   */
+  offscreen?: boolean;
+}
+
+/** How far past the screen edge (px) the estimate may go before it counts as off-screen. */
+const OFFSCREEN_MARGIN = 40;
+
+/** Pin a point to the visible area and say whether it was outside it. */
+export function clampToView(x: number, y: number, w: number, h: number, margin = OFFSCREEN_MARGIN) {
+  const offscreen = x < -margin || y < -margin || x > w + margin || y > h + margin;
+  return { x: Math.min(w, Math.max(0, x)), y: Math.min(h, Math.max(0, y)), offscreen };
+}
+
+/**
+ * What to tell the user when they've moved away from the calibration pose, in their terms
+ * (wording from Adeeb's branch). The camera image isn't mirrored: the user's left is the
+ * image's right (larger x), and a lower head is larger y.
+ */
+export function postureAdvice(p: PoseRef, ref: PoseRef): string | null {
+  const shiftX = (p.noseX - ref.noseX) / ref.faceH / 0.3;
+  const shiftY = (p.noseY - ref.noseY) / ref.faceH / 0.3;
+  const scale = Math.log(p.faceH / ref.faceH) / 0.25;
+  const rot = Math.hypot(p.yaw - ref.yaw, p.pitch - ref.pitch) / 0.3;
+  const worst = Math.max(Math.abs(shiftX), Math.abs(shiftY), Math.abs(scale), rot);
+  if (worst < 1) return null;
+  if (worst === Math.abs(scale)) return scale > 0 ? "Move back a little" : "Move a little closer";
+  if (worst === Math.abs(shiftX)) return shiftX > 0 ? "Move a little to your right" : "Move a little to your left";
+  if (worst === Math.abs(shiftY)) return shiftY > 0 ? "Raise your head a little" : "Lower your head a little";
+  return "Turn your head back toward the screen";
 }
 
 /** Head pose summary: nose x/y and face height (frame fractions), yaw/pitch (rad). */
@@ -98,6 +131,13 @@ export class GazeEngine {
   private poseRef: PoseRef | null = null;
   /** Smoothed current pose deviation (tolerances). */
   poseDeviation = 0;
+  /** Smoothed current pose, for posture advice. */
+  private poseNow: PoseRef | null = null;
+
+  /** Advice to get back to the calibration pose, or null if it's fine / unknown. */
+  postureAdvice(): string | null {
+    return this.poseRef && this.poseNow ? postureAdvice(this.poseNow, this.poseRef) : null;
+  }
   private listeners = new Set<(g: GazePoint) => void>();
   private rawListeners = new Set<(f: FaceFrame | null) => void>();
   /** Smoothed iris diameter (fraction of frame width), for distance estimation. */
@@ -149,8 +189,13 @@ export class GazeEngine {
     while (this.recent.length && f.t - this.recent[0].t > 1500) this.recent.shift();
     const closed = f.blinkL > 0.45 && f.blinkR > 0.45;
     if (this.poseRef && !closed) {
-      const d = poseDeviation(poseOf(f), this.poseRef);
+      const pose = poseOf(f);
+      const d = poseDeviation(pose, this.poseRef);
       this.poseDeviation = this.poseDeviation * 0.9 + d * 0.1;
+      const prev = this.poseNow;
+      this.poseNow = prev
+        ? { noseX: prev.noseX * 0.9 + pose.noseX * 0.1, noseY: prev.noseY * 0.9 + pose.noseY * 0.1, faceH: prev.faceH * 0.9 + pose.faceH * 0.1, yaw: prev.yaw * 0.9 + pose.yaw * 0.1, pitch: prev.pitch * 0.9 + pose.pitch * 0.1 }
+        : pose;
     }
     if (closed || !this.calibrated) {
       // Freeze the cursor while the eyes are closed: iris landmarks are garbage then.
@@ -159,8 +204,9 @@ export class GazeEngine {
     }
     const p = this.predictRaw(f.vector);
     const s = this.filter.filter(p, f.t);
+    const c = clampToView(s.x, s.y, innerWidth, innerHeight);
     const confidence = this.poseRef ? confidenceFromDeviation(this.poseDeviation) : 1;
-    this.emit({ t: f.t, x: s.x, y: s.y, valid: true, blinkL: f.blinkL, blinkR: f.blinkR, source: "camera", confidence });
+    this.emit({ t: f.t, x: c.x, y: c.y, valid: true, blinkL: f.blinkL, blinkR: f.blinkR, source: "camera", confidence, offscreen: c.offscreen });
   };
 
   /** Mean feature vector over open-eye frames in [t0, t1]. */
@@ -178,6 +224,7 @@ export class GazeEngine {
     this.implicit = [];
     this.poseRef = poseRef ?? (poseFrames ? medianPose(poseFrames) : null);
     this.poseDeviation = 0;
+    this.poseNow = null;
     this.refit();
     try {
       localStorage.setItem(KEY_CAL, JSON.stringify({ samples, poseRef: this.poseRef }));

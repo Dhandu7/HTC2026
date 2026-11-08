@@ -1,6 +1,9 @@
 // The two keyboards compared in the demo:
-//  - GazeTypeKeyboard: 16 large targets (4x4) sized for 2–3° webcam error;
-//    8 letter-group keys + prediction chips + personal phrases + abbreviation expansion.
+//  - GazeTypeKeyboard: opens on a HOME screen of 6 large chips (3x2): 5 ready-to-speak
+//    phrases + "Keyboard". Recorded-session evaluation showed webcam tracking supports 6
+//    large targets (~96% hits after a 25-point calibration) but not 16 (~50%), so the
+//    16-target (4x4) typing grid is the fallback, one selection away.
+//    The typing grid: 8 letter-group keys + prediction chips + personal phrases + abbreviation expansion.
 //  - BaselineKeyboard: a standard letter-by-letter dwell QWERTY (optional word chips).
 import { LETTER_GROUPS, tokenize, type PredictionEngine, type Slot, type Suggestion } from "../predict/engine";
 import { llmPredict } from "../predict/llm";
@@ -28,14 +31,25 @@ const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const btn = (id: string, label: string, cls = "", sub = "") =>
   `<button class="key ${cls}" data-target="${esc(id)}"><span class="lbl">${label}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</button>`;
 
-type Panel = "main" | "phrases" | "menu" | { letters: string };
+type Panel = "home" | "main" | "phrases" | "menu" | { letters: string };
+
+/** Number of phrase chips on the home screen (the 6th target opens the keyboard). */
+export const HOME_CHIPS = 5;
 
 export class GazeTypeKeyboard implements Keyboard {
   readonly name = "gazetype";
   committed: string[] = [];
   slots: Slot[] = [];
   spellMode = false;
-  private panel: Panel = "main";
+  /** Start on (and return to) the 6-chip home screen. Off during typing benchmarks. */
+  useHome = true;
+  private panel: Panel = "home";
+  /**
+   * Phrases on the home screen. Provider so the conversation engine can supply replies to
+   * what the partner said; defaults to the user's most-used phrases.
+   */
+  homeSource: (n: number) => string[] = (n) => this.engine.topPhrases(n);
+  private homeItems: string[] = [];
   private chips: Suggestion[] = [];
   private llmChips: Suggestion[] = [];
   private panelItems: Suggestion[] = [];
@@ -53,8 +67,12 @@ export class GazeTypeKeyboard implements Keyboard {
   clear() {
     this.committed = [];
     this.slots = [];
-    this.panel = "main";
+    this.panel = this.useHome ? "home" : "main";
     this.update();
+  }
+
+  get onHome() {
+    return this.panel === "home";
   }
 
   private committedTokens() {
@@ -98,7 +116,15 @@ export class GazeTypeKeyboard implements Keyboard {
   render(root: HTMLElement) {
     root.className = "board gazetype";
     const p = this.panel;
-    if (p === "main") {
+    if (p === "home") {
+      this.homeItems = this.homeSource(HOME_CHIPS);
+      const items = this.homeItems.slice(0, HOME_CHIPS);
+      root.innerHTML =
+        items.map((t, i) => btn(`home:${i}`, esc(t), "home-chip", "speak")).join("") +
+        Array.from({ length: HOME_CHIPS - items.length }, () => `<div class="key empty"></div>`).join("") +
+        btn("keyboard", "⌨ Keyboard", "home-chip ctrl", "type something new");
+      root.className = "board gazetype home";
+    } else if (p === "main") {
       const chips = this.visibleChips()
         .map((c, i) =>
           c
@@ -128,7 +154,7 @@ export class GazeTypeKeyboard implements Keyboard {
       root.innerHTML =
         btn("act:speak", "🔊 Speak", "action") +
         (this.host.overlay ? btn("act:insert", "📋 Insert", "action", "into app") : btn("act:copy", "📋 Copy", "action")) +
-        btn("act:clear", "🗑 Clear", "action") +
+        btn("act:clear", this.useHome ? "🏠 Home" : "🗑 Clear", "action", this.useHome ? "clears text" : "") +
         btn("act:spell", this.spellMode ? "Spell: ON" : "Spell: OFF", "action", "exact letters") +
         btn("act:recal", "◎ Recalibrate", "action") +
         (this.host.overlay ? btn("act:hide", "✖ Hide", "action") : btn("act:settings", "⚙ Settings", "action")) +
@@ -182,6 +208,18 @@ export class GazeTypeKeyboard implements Keyboard {
     const [kind, arg] = id.split(":");
     let ev: EventKind = "other";
     switch (kind) {
+      case "home": {
+        // One selection = one message: speak the phrase straight away.
+        const t = this.homeItems[Number(arg)];
+        if (!t) return "other";
+        this.commitSentence(t);
+        this.host.action("speak");
+        return "phrase";
+      }
+      case "keyboard":
+        this.panel = "main";
+        this.update();
+        return "other";
       case "g": {
         const g = LETTER_GROUPS[Number(arg)];
         if (this.spellMode) {

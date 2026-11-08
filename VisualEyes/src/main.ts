@@ -158,7 +158,7 @@ function updateStatus() {
     lastError ? `error ${lastError.meanDeg.toFixed(1)}° (±${lastError.precisionDeg.toFixed(1)}°)` : gaze.source === "camera" ? "not calibrated" : "",
     gaze.source === "camera" && gaze.calibrated
       ? gaze.lastPoint.confidence < 0.5
-        ? `<b class="bad">● moved since calibrating</b>`
+        ? `<b class="bad">● ${gaze.postureAdvice() ?? "moved since calibrating"}</b>`
         : `<b class="ok">● posture ok</b>`
       : "",
     gaze.source === "camera" ? `${g.distanceCm.toFixed(0)} cm${settings.distanceCm ? "" : " est."}` : "",
@@ -228,7 +228,7 @@ function onGaze(g: GazePoint) {
   measure();
   // Low confidence (face lost, or head far from the calibration pose): don't let dwell
   // build up on whatever the drifting cursor happens to cross.
-  const target = g.valid && g.confidence >= 0.3 ? targetTracker.update(g.t, rects, g.x, g.y) : null;
+  const target = g.valid && !g.offscreen && g.confidence >= 0.3 ? targetTracker.update(g.t, rects, g.x, g.y) : null;
   let out;
   if (settings.selectionMode === "blink" && g.source === "camera") out = blink.update(g.t, target, g.blinkL, g.blinkR);
   else if (settings.selectionMode === "click") out = { selected: null, progress: 0, target };
@@ -403,7 +403,8 @@ function postureWatch(g: GazePoint) {
   lowSince ??= g.t;
   if (g.t - lowSince > 2000 && g.t - lastPostureToast > 20_000) {
     lastPostureToast = g.t;
-    showToast("You've moved a long way from where you calibrated, so tracking may be off. Move back, or press <b>◎ Calibrate</b>.", 6000);
+    const advice = gaze.postureAdvice();
+    showToast(`${advice ? `<b>${advice}.</b> ` : ""}You've moved away from where you calibrated, so tracking may be off. Move back, or press <b>◎ Calibrate</b>.`, 6000);
   }
 }
 
@@ -489,6 +490,7 @@ const runs = (): RunResult[] => {
 function startRun(index: number) {
   const target = BENCHMARK_SENTENCES[index % BENCHMARK_SENTENCES.length];
   benchmark = { index, target };
+  gazeKb.useHome = false;
   kb.clear();
   session = new TypingSession(kb.name, gaze.source === "mouse" ? `${settings.selectionMode}+mouse` : settings.selectionMode, target);
   targetBar.hidden = false;
@@ -516,6 +518,7 @@ function finishRun(t: number) {
   );
   benchmark = null;
   targetBar.hidden = true;
+  gazeKb.useHome = true;
   kb.clear();
   render();
 }
