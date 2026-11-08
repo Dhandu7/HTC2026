@@ -8,6 +8,10 @@ voice-slot cap.
 AWS side, decisions and the checklist for the person deploying it: [`../docs/AWS_VOICE_HANDOFF.md`](../docs/AWS_VOICE_HANDOFF.md).
 Why the local engines (OpenVoice, Chatterbox) were dropped, with the measurements: [`../docs/VOICE_ENGINE_FLOW.md`](../docs/VOICE_ENGINE_FLOW.md).
 
+## Run it on another person's machine (macOS, Linux or Windows)
+
+From the `POC` folder: `npm install`, copy `.env.example` to `.env` and put the ElevenLabs key after `ELEVENLABS_API_KEY=`, then `npm run voice` (or `npm run dev:voice` to start the app and the LLM proxy as well). The first run builds a Python 3.12 environment by itself, so it needs internet and any Python 3 on the PATH. On Windows install Python from python.org (tick "Add python.exe to PATH"); no WSL or bash is needed, because `npm run voice` does the setup in Node there. `hosted.sh` itself is for macOS, Linux and WSL.
+
 ## Run it
 
 ```bash

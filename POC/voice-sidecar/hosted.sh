@@ -49,12 +49,19 @@ load_key() {
 }
 case "${1:-}" in
   setup)
+    case "$(uname -s 2>/dev/null)" in
+      MINGW*|MSYS*|CYGWIN*) echo "This script needs a Unix-style shell with a POSIX layout (macOS, Linux, or WSL). Git Bash on Windows is not enough: run it inside WSL." >&2; exit 2 ;;
+    esac
     if command -v uv >/dev/null 2>&1; then UV=uv; else
-      [ -x .tools/bin/uv ] || { python3 -m venv .tools && .tools/bin/pip install --quiet uv; }
+      if [ ! -x .tools/bin/uv ]; then
+        python3 -m venv .tools 2>/dev/null || { rm -rf .tools; echo "Could not create a Python virtual environment with python3 ($(python3 --version 2>&1)). On Debian/Ubuntu run: sudo apt install python3-venv python3-pip. Or install uv (https://docs.astral.sh/uv/) and run this again." >&2; exit 1; }
+        .tools/bin/pip install --quiet uv || { echo "Could not install uv with pip (no internet, or a proxy?). Install uv yourself (https://docs.astral.sh/uv/) and run this again." >&2; exit 1; }
+      fi
       UV=.tools/bin/uv
     fi
-    [ -d .venv-hosted ] || $UV venv --python 3.12 .venv-hosted
-    $UV pip install --python "$PY" -r requirements.txt
+    # The service is tested on Python 3.12, so uv fetches that exact version whatever python3 you have.
+    [ -d .venv-hosted ] || $UV venv --python 3.12 .venv-hosted || { echo "Could not create the Python 3.12 environment. uv downloads Python 3.12 the first time, so it needs internet access. If you have Python 3.12 installed, run: $UV venv --python /path/to/python3.12 .venv-hosted" >&2; exit 1; }
+    $UV pip install --python "$PY" -r requirements.txt || { echo "Installing the requirements failed (see above). Delete the .venv-hosted folder and run this again." >&2; exit 1; }
     echo "Done. Try: ./hosted.sh test" ;;
   key-set)
     have_keychain || { echo "key-set uses the macOS Keychain. On Linux or in AWS, put the key in a secrets manager (see docs/AWS_VOICE_HANDOFF.md)." >&2; exit 2; }
