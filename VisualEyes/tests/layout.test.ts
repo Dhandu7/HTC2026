@@ -13,7 +13,8 @@ describe("typing grid layout", () => {
     kb.select("keyboard"); // the app opens on the home screen; the grid is one step away
     const root = fakeRoot();
     kb.render(root);
-    const cells = [...root.innerHTML.matchAll(/<(?:button|div) class="key[^"]*"(?: data-target="([^"]*)")?/g)].map((m) => m[1] ?? "empty");
+    // Each key is a gaze target (.g) around a keycap; blank cells are a .g with no target.
+    const cells = [...root.innerHTML.matchAll(/<div class="g(?: [^"]*)?"(?: data-target="([^"]*)")?/g)].map((m) => m[1] ?? "empty");
     expect(cells).toHaveLength(16);
     const at = (row: number, col: number) => cells[(row - 1) * 4 + (col - 1)];
     expect(at(3, 2)).toBe("del");

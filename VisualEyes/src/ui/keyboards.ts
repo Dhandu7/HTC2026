@@ -6,6 +6,7 @@ import { LETTER_GROUPS, tokenize, type PredictionEngine, type Slot, type Suggest
 import { llmPredict } from "../predict/llm";
 import { containsSlur, isSlur, SLUR_NOTICE } from "../safety/slurs";
 import type { EventKind } from "../metrics/session";
+import { esc, g } from "./dom";
 
 export interface KeyboardHost {
   /** Re-render requested (state changed asynchronously, e.g. LLM results arrived). */
@@ -18,6 +19,10 @@ export interface KeyboardHost {
   activeProfileId(): string;
   /** A short message for the user (e.g. why a word was blocked). */
   notice(message: string): void;
+  /** AI sentence suggestions are switched on (Settings). Word prediction is always on. Default on. */
+  aiEnabled?(): boolean;
+  /** A benchmark run is in progress (shows "Finish run" in the menu). */
+  benchmarking?(): boolean;
 }
 
 export interface Keyboard {
@@ -27,17 +32,26 @@ export interface Keyboard {
   select(id: string): EventKind;
   text(): string;
   clear(): void;
+  /** Clear, but Undo can bring it back. */
+  clearUndoable(): void;
+  undo(): boolean;
+  canUndo(): boolean;
+  deleteWord(): void;
+  /** Add a whole phrase or sentence (Saved phrases). */
+  appendText(text: string): void;
+  displayHtml(): string;
 }
 
-const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
-const btn = (id: string, label: string, cls = "", sub = "") =>
-  `<button class="key ${cls}" data-target="${esc(id)}"><span class="lbl">${label}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</button>`;
+/** One key: a gaze target around a keycap. `kind` is the keycap style (grp, fn, chip, phr). Labels are escaped here. */
+const key = (id: string, label: string, kind = "", sub = "", o: { on?: boolean; read?: boolean } = {}) =>
+  g(id, `<span class="kl">${esc(label)}</span>${sub ? `<small>${esc(sub)}</small>` : ""}`, { face: `k ${kind}`.trim(), on: o.on, read: o.read });
+const blank = () => `<div class="g blank"><div class="face k empty"></div></div>`;
 
-type Panel = "home" | "main" | "phrases" | "menu" | "profiles" | { letters: string };
+type Panel = "home" | "main" | "phrases" | "menu" | "profiles" | "numbers" | { letters: string };
 
 /**
- * Home screen: 6 large targets (3x2) = this many ready-to-speak phrases + "⌨ Keyboard".
+ * Home screen: 6 large targets (3x2) = this many ready-to-speak phrases + "Keyboard".
  * Recorded pointer sessions hit 6 large buttons far more often than the 16-key grid
  * (mean 59% vs 32% of frames), so the grid is the fallback, one selection away.
  */
@@ -45,6 +59,8 @@ export const HOME_CHIPS = 5;
 
 /** Longer chip text gets a smaller font so it fits the target instead of being cut off. */
 const chipSize = (label: string) => (label.length > 34 ? " xlong" : label.length > 16 ? " long" : "");
+/** How many steps Undo remembers. */
+const UNDO_MAX = 60;
 
 /** Wait this long after the last selection before asking the LLM, so quick selections send one request. */
 const LLM_DEBOUNCE_MS = 150;
@@ -76,6 +92,7 @@ export class GazeTypeKeyboard implements Keyboard {
   private llmTimer: ReturnType<typeof setTimeout> | undefined;
   private llmAbort: AbortController | null = null;
   private lastPick: { word: string; before: string[]; at: number } | null = null;
+  private undoStack: { committed: string[]; slots: Slot[] }[] = [];
 
   constructor(
     private engine: PredictionEngine,
@@ -90,6 +107,53 @@ export class GazeTypeKeyboard implements Keyboard {
     this.committed = [];
     this.slots = [];
     this.panel = this.useHome ? "home" : "main";
+    this.undoStack = [];
+    this.update();
+  }
+
+  private snapshot() {
+    this.undoStack.push({ committed: [...this.committed], slots: [...this.slots] });
+    if (this.undoStack.length > UNDO_MAX) this.undoStack.shift();
+  }
+
+  clearUndoable() {
+    if (!this.committed.length && !this.slots.length) return;
+    this.snapshot();
+    this.committed = [];
+    this.slots = [];
+    // Clearing (and speaking) goes back to the start: the home screen, or the grid in benchmarks.
+    this.panel = this.useHome ? "home" : "main";
+    this.update();
+  }
+
+  canUndo() {
+    return this.undoStack.length > 0;
+  }
+
+  undo(): boolean {
+    const prev = this.undoStack.pop();
+    if (!prev) return false;
+    this.committed = prev.committed;
+    this.slots = prev.slots;
+    this.panel = "main";
+    this.lastPick = null;
+    this.update();
+    return true;
+  }
+
+  deleteWord() {
+    if (!this.committed.length && !this.slots.length) return;
+    this.snapshot();
+    if (this.slots.length) this.slots = [];
+    else this.committed.pop();
+    this.lastPick = null;
+    this.update();
+  }
+
+  appendText(text: string) {
+    this.snapshot();
+    this.commitSentence(`${this.text()} ${text}`);
+    this.panel = "main";
     this.update();
   }
 
@@ -117,7 +181,7 @@ export class GazeTypeKeyboard implements Keyboard {
     const seq = ++this.llmSeq;
     this.cancelLlm();
     // Ask the LLM for sentence continuations once there is some context and no word in progress.
-    if (!this.slots.length && words.length >= 1) {
+    if (!this.slots.length && words.length >= 1 && this.host.aiEnabled?.() !== false) {
       const text = this.text();
       this.llmTimer = setTimeout(() => {
         const ctrl = (this.llmAbort = new AbortController());
@@ -152,86 +216,96 @@ export class GazeTypeKeyboard implements Keyboard {
   }
 
   render(root: HTMLElement) {
-    root.className = "board gazetype";
+    root.className = "tray";
     const p = this.panel;
     if (p === "home") {
       this.homeItems = this.homeSource(HOME_CHIPS);
       const items = this.homeItems.slice(0, HOME_CHIPS);
       root.innerHTML =
-        items.map((t, i) => btn(`home:${i}`, esc(t), "home-chip", "speak")).join("") +
-        Array.from({ length: HOME_CHIPS - items.length }, () => `<div class="key empty"></div>`).join("") +
-        btn("keyboard", "⌨ Keyboard", "home-chip ctrl", "type something new");
-      root.className = "board gazetype home";
+        items.map((t, i) => key(`home:${i}`, t, "phr", "speak", { read: true })).join("") +
+        Array.from({ length: HOME_CHIPS - items.length }, blank).join("") +
+        key("keyboard", "Keyboard", "fn", "type something new");
+      root.className = "tray home";
     } else if (p === "main") {
       const chips = this.visibleChips()
         .map((c, i) =>
-          c
-            ? btn(`chip:${i}`, esc(c.label), `chip ${c.kind}${chipSize(c.label)}`, c.kind === "llm" ? "✨ AI" : c.kind === "phrase" ? "phrase" : "")
-            : `<div class="key chip empty"></div>`,
+          c ? key(`chip:${i}`, c.label, `chip${c.kind === "llm" ? " ai" : ""}${chipSize(c.label)}`, c.kind === "llm" ? "AI" : c.kind === "phrase" ? "phrase" : "", { read: c.kind !== "word" }) : blank(),
         )
         .join("");
-      const group = (i: number) => btn(`g:${i}`, LETTER_GROUPS[i].toUpperCase(), "group");
-      const phrasesLabel = this.slots.length >= 2 ? "✨ Expand" : "💬 Phrases";
-      const phrasesSub = this.slots.length >= 2 ? "initials → sentence" : "";
-      // ⌫ sits one step in from the edge (row 3, column 2): the pointer struggles to reach the
+      const group = (i: number) => key(`g:${i}`, LETTER_GROUPS[i].toUpperCase(), "grp");
+      const n = this.slots.length;
+      // Delete sits one step in from the edge (row 3, column 2): the pointer struggles to reach the
       // corners, bottom-left worst of all, and delete is used constantly. The least-used
       // letter group (WXYZ) takes the bottom-left corner instead. Letters keep reading order.
       root.innerHTML =
         chips +
         [0, 1, 2, 3].map(group).join("") +
         group(4) +
-        btn("del", "⌫", "ctrl", this.slots.length ? "letter" : "word") +
+        key("del", "Delete", "fn", n ? "letter" : "word") +
         group(5) +
         group(6) +
         group(7) +
-        btn("space", "␣", "ctrl", this.slots.length ? "accept" : "") +
-        btn("phrases", phrasesLabel, "ctrl", phrasesSub) +
-        btn("menu", "☰ Done", "ctrl", this.host.overlay ? "speak / insert" : "speak");
+        key("space", "Space", "fn", n ? "accept" : "") +
+        key("phrases", n >= 2 ? "Expand" : "Phrases", "fn", n >= 2 ? "initials to sentence" : "") +
+        key("menu", "Done", "fn", "speak and more");
     } else if (p === "phrases") {
       const items = this.panelItems.slice(0, 6);
       root.innerHTML =
-        items.map((s, i) => btn(`pi:${i}`, esc(s.label), `phrase-item ${s.kind}`, s.kind === "llm" ? "✨ AI" : "")).join("") +
-        Array.from({ length: 6 - items.length }, () => `<div class="key empty"></div>`).join("") +
-        btn("back", "↩ Back", "ctrl") +
-        btn("menu", "☰ Done", "ctrl");
-      root.className = "board gazetype panel2x4";
+        items.map((s, i) => key(`pi:${i}`, s.label, "phr", s.kind === "llm" ? "AI" : "", { read: true })).join("") +
+        Array.from({ length: 6 - items.length }, blank).join("") +
+        key("back", "Back", "fn") +
+        key("menu", "Done", "fn");
+      root.className = "tray rows2";
     } else if (p === "menu") {
       const me = this.host.profiles().find((p) => p.id === this.host.activeProfileId());
+      const ov = this.host.overlay;
       root.innerHTML =
-        btn("act:speak", "🔊 Speak", "action") +
-        (this.host.overlay ? btn("act:insert", "📋 Insert", "action", "into app") : btn("act:copy", "📋 Copy", "action")) +
-        btn("act:clear", this.useHome ? "🏠 Home" : "🗑 Clear", "action", this.useHome ? "clears text" : "") +
-        btn("act:spell", this.spellMode ? "Spell: ON" : "Spell: OFF", "action", "exact letters") +
-        btn("act:recal", "◎ Recalibrate", "action") +
-        (this.host.overlay ? btn("act:hide", "✖ Hide", "action") : btn("act:settings", "⚙ Settings", "action")) +
-        btn("act:profiles", "👤 Switch user", "action", esc(me?.name ?? "")) +
-        btn("act:benchmark-done", "⏱ Finish run", "action") +
-        btn("act:recenter", "⊕ Re-center", "action", "or blink 3×") +
-        `<div class="key empty"></div>`.repeat(2) +
-        btn("back", "↩ Back", "ctrl");
-      root.className = "board gazetype panel3x4";
+        key("act:speak", "Speak", "fn") +
+        (ov ? key("act:insert", "Insert", "fn", "into app") : key("act:copy", "Copy", "fn")) +
+        key("act:clear", this.useHome ? "Home" : "Clear", "fn", this.useHome ? "clears text" : "") +
+        key("act:spell", `Spell: ${this.spellMode ? "On" : "Off"}`, "fn", "exact letters", { on: this.spellMode }) +
+        key("act:voice", "My voice", "fn") +
+        key("act:phrases", "Saved phrases", "fn") +
+        key("act:recent", "Recent", "fn", "say again") +
+        key("act:numbers", "Numbers", "fn", "times, amounts") +
+        key("act:access", "Accessibility", "fn") +
+        key("act:settings", "Settings", "fn") +
+        key("act:recal", "Recalibrate", "fn") +
+        key("act:recenter", "Re-centre", "fn", "or blink 3 times") +
+        key("act:profiles", "Switch user", "fn", me?.name ?? "") +
+        key("act:rest", "Rest", "fn", "pause eye tracking") +
+        (this.host.benchmarking?.() ? key("act:benchmark-done", "Finish run", "fn") : ov ? key("act:hide", "Hide", "fn") : blank()) +
+        key("back", "Back", "fn");
+    } else if (p === "numbers") {
+      root.innerHTML =
+        [..."1234567890"].map((d) => key(`l:${d}`, d, "grp")).join("") +
+        key("space", "Space", "fn", this.slots.length ? "accept" : "") +
+        key("del", "Delete", "fn") +
+        blank() + blank() + blank() +
+        key("back", "Back", "fn", "to letters");
     } else if (p === "profiles") {
       const list = this.host.profiles().slice(0, 7);
       const active = this.host.activeProfileId();
       root.innerHTML =
-        list.map((pr) => btn(`prof:${pr.id}`, esc(pr.name), `action${pr.id === active ? " current" : ""}`, pr.id === active ? "current" : "")).join("") +
-        `<div class="key empty"></div>`.repeat(7 - list.length) +
-        btn("back", "↩ Back", "ctrl");
-      root.className = "board gazetype panel2x4";
+        list.map((pr) => key(`prof:${pr.id}`, pr.name, `fn${pr.id === active ? " cur" : ""}`, pr.id === active ? "current" : "")).join("") +
+        Array.from({ length: 7 - list.length }, blank).join("") +
+        key("back", "Back", "fn");
+      root.className = "tray rows2";
     } else {
       const letters = p.letters.split("");
       root.innerHTML =
-        letters.map((l) => btn(`l:${l}`, l.toUpperCase(), "group")).join("") +
-        Array.from({ length: 4 - letters.length }, () => `<div class="key empty"></div>`).join("") +
-        btn("back", "↩ Back", "ctrl");
-      root.className = "board gazetype panel-letters";
+        letters.map((l) => key(`l:${l}`, l.toUpperCase(), "grp")).join("") +
+        Array.from({ length: 4 - letters.length }, blank).join("") +
+        key("back", "Back", "fn");
+      root.className = "tray letters";
     }
   }
 
   /** Text shown in the output bar, with the in-progress word highlighted. */
   displayHtml(): string {
     const pv = this.preview();
-    return `${esc(this.text())}${pv ? ` <span class="pending">${esc(pv)}</span>` : ""}<span class="caret"></span>`;
+    if (!this.text() && !pv) return `<span class="caret"></span><span class="ph">Look at a key to begin your message</span>`;
+    return `${esc(this.text())}${pv ? `${this.text() ? " " : ""}<span class="pending">${esc(pv)}</span>` : ""}<span class="caret"></span>`;
   }
 
   private commitWord(w: string) {
@@ -280,6 +354,7 @@ export class GazeTypeKeyboard implements Keyboard {
   select(id: string): EventKind {
     const [kind, arg] = id.split(":");
     let ev: EventKind = "other";
+    if (["g", "l", "chip", "space", "del", "pi"].includes(kind) && !(kind === "g" && this.spellMode)) this.snapshot();
     switch (kind) {
       case "home": {
         // One selection = one message: speak the phrase straight away (speaking clears and returns home).
@@ -305,7 +380,7 @@ export class GazeTypeKeyboard implements Keyboard {
       }
       case "l":
         this.slots.push(arg);
-        this.panel = "main";
+        if (this.panel !== "numbers") this.panel = "main";
         ev = "letter";
         break;
       case "chip": {
@@ -379,9 +454,12 @@ export class GazeTypeKeyboard implements Keyboard {
           return "other";
         }
         if (arg === "clear") {
-          // Clears the text and goes back to the start (home screen, or the grid in benchmarks).
-          this.clear();
+          this.clearUndoable();
           return "delete";
+        }
+        if (arg === "numbers") {
+          this.panel = "numbers";
+          return "other";
         }
         this.panel = "main";
         this.host.action(arg);
@@ -398,6 +476,7 @@ export class BaselineKeyboard implements Keyboard {
   readonly name = "baseline-qwerty";
   value = "";
   private chips: Suggestion[] = [];
+  private undoStack: string[] = [];
 
   constructor(
     private engine: PredictionEngine,
@@ -411,6 +490,44 @@ export class BaselineKeyboard implements Keyboard {
 
   clear() {
     this.value = "";
+    this.undoStack = [];
+    this.update();
+  }
+
+  private snapshot() {
+    this.undoStack.push(this.value);
+    if (this.undoStack.length > UNDO_MAX) this.undoStack.shift();
+  }
+
+  clearUndoable() {
+    if (!this.value) return;
+    this.snapshot();
+    this.value = "";
+    this.update();
+  }
+
+  canUndo() {
+    return this.undoStack.length > 0;
+  }
+
+  undo(): boolean {
+    const prev = this.undoStack.pop();
+    if (prev === undefined) return false;
+    this.value = prev;
+    this.update();
+    return true;
+  }
+
+  deleteWord() {
+    if (!this.value) return;
+    this.snapshot();
+    this.value = this.value.replace(/\s*\S+\s*$/, "");
+    this.update();
+  }
+
+  appendText(text: string) {
+    this.snapshot();
+    this.value = `${this.value && !/\s$/.test(this.value) ? `${this.value} ` : this.value}${text} `;
     this.update();
   }
 
@@ -422,27 +539,25 @@ export class BaselineKeyboard implements Keyboard {
   }
 
   render(root: HTMLElement) {
-    root.className = "board baseline";
+    root.className = "tray baseline";
     const chips = this.withPrediction
-      ? `<div class="row chips">${[0, 1, 2].map((i) => (this.chips[i] ? btn(`chip:${i}`, esc(this.chips[i].label), "chip word") : `<div class="key chip empty"></div>`)).join("")}</div>`
+      ? `<div class="krow">${[0, 1, 2].map((i) => (this.chips[i] ? key(`chip:${i}`, this.chips[i].label, "chip") : blank())).join("")}</div>`
       : "";
     root.innerHTML =
       chips +
-      QWERTY.map((r) => `<div class="row">${[...r].map((c) => btn(`k:${c}`, c.toUpperCase())).join("")}</div>`).join("") +
-      `<div class="row">${btn("del", "⌫", "ctrl")}${btn("space", "space", "ctrl wide")}${btn("act:speak", "🔊", "ctrl")}${btn(
-        "act:benchmark-done",
-        "⏱",
-        "ctrl",
-      )}${this.host.overlay ? btn("act:insert", "📋", "ctrl") : ""}</div>`;
+      QWERTY.map((r) => `<div class="krow">${[...r].map((c) => key(`k:${c}`, c.toUpperCase())).join("")}</div>`).join("") +
+      `<div class="krow">${key("del", "Delete", "fn")}${g("space", `<span class="kl">Space</span>`, { cls: "wide", face: "k fn" })}${key("act:speak", "Speak", "fn")}${this.host.benchmarking?.() ? key("act:benchmark-done", "Finish run", "fn") : ""}${this.host.overlay ? key("act:insert", "Insert", "fn") : ""}</div>`;
   }
 
   displayHtml() {
+    if (!this.value) return `<span class="caret"></span><span class="ph">Look at a key to begin your message</span>`;
     return `${esc(this.value)}<span class="caret"></span>`;
   }
 
   select(id: string): EventKind {
     const [kind, arg] = id.split(":");
     let ev: EventKind = "other";
+    if (kind === "k" || kind === "space" || kind === "del" || kind === "chip") this.snapshot();
     if (kind === "k") {
       this.value += this.value.length === 0 ? arg.toUpperCase() : arg;
       ev = "letter";

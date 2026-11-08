@@ -31,6 +31,7 @@ export class SystemVoice implements VoiceProvider {
     }
     const u = this.makeUtterance(text);
     if (opts.pace) u.rate = opts.pace;
+    if (opts.volume !== undefined) u.volume = Math.max(0, Math.min(1, opts.volume));
     let cancelled = false;
     let markStarted!: () => void;
     let markDone!: () => void;

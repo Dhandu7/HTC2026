@@ -100,10 +100,17 @@ export class GazeEngine {
   private offset = { x: 0, y: 0 };
 
   constructor() {
+    let mouse: { x: number; y: number } | null = null;
     window.addEventListener("mousemove", (e) => {
       if (this.source !== "mouse") return;
+      mouse = { x: e.clientX, y: e.clientY };
       this.emit({ t: performance.now(), x: e.clientX, y: e.clientY, valid: true, blinkL: 0, blinkR: 0, source: "mouse" });
     });
+    document.addEventListener("mouseleave", () => (mouse = null));
+    // A still mouse keeps "looking", like a camera that sends every frame, so hover-and-hold selects in mouse mode.
+    setInterval(() => {
+      if (this.source === "mouse" && mouse) this.emit({ t: performance.now(), x: mouse.x, y: mouse.y, valid: true, blinkL: 0, blinkR: 0, source: "mouse" });
+    }, 50);
   }
 
   /** The fitted model's raw prediction (the pointer model sees yaw and pitch only). */

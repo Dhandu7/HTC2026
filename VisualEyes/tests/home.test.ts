@@ -56,6 +56,6 @@ describe("home screen", () => {
     const root = fakeRoot();
     kb.render(root);
     expect(root.innerHTML).toContain("Reply A");
-    expect((root.innerHTML.match(/key empty/g) ?? []).length).toBe(HOME_CHIPS - 2);
+    expect((root.innerHTML.match(/class="g blank"/g) ?? []).length).toBe(HOME_CHIPS - 2);
   });
 });

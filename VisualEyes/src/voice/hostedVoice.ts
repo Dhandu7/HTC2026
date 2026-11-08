@@ -14,13 +14,35 @@ export interface AudioSink {
 
 export class BrowserAudioSink implements AudioSink {
   private ctx: AudioContext | null = null;
+  private gain: GainNode | null = null;
   private player: PcmPlayer | null = null;
+  private level = 1;
 
   private get(): { ctx: AudioContext; player: PcmPlayer } {
     // Created on first use, which happens after the user's click, so the browser lets it play.
     this.ctx ??= new AudioContext();
-    this.player ??= new PcmPlayer(this.ctx as unknown as ConstructorParameters<typeof PcmPlayer>[0]);
+    if (!this.gain) {
+      this.gain = this.ctx.createGain();
+      this.gain.gain.value = this.level;
+      this.gain.connect(this.ctx.destination);
+    }
+    this.player ??= new PcmPlayer(this.ctx as unknown as ConstructorParameters<typeof PcmPlayer>[0], this.gain);
     return { ctx: this.ctx, player: this.player };
+  }
+
+  /** Loudness 0..1 for everything this sink plays. */
+  setVolume(v: number) {
+    this.level = Math.max(0, Math.min(1, v));
+    if (this.gain) this.gain.gain.value = this.level;
+  }
+
+  /** Pause and resume whatever is playing (the clip keeps its place). */
+  pause() {
+    void this.ctx?.suspend().catch(() => {});
+  }
+
+  resume() {
+    void this.ctx?.resume().catch(() => {});
   }
 
   async decode(bytes: ArrayBuffer): Promise<Pcm> {
