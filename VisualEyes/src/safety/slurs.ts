@@ -101,4 +101,4 @@ export const stripSlurs = (text: string): string =>
     .trim();
 
 /** What the user sees when something is blocked. Plain and non-judgemental. */
-export const SLUR_NOTICE = "That word is blocked: VocalEyes doesn't allow slurs. Swearing is fine.";
+export const SLUR_NOTICE = "That word is blocked: VisualEyes doesn't allow slurs. Swearing is fine.";

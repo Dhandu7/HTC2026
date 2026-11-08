@@ -1,6 +1,6 @@
 {
-  "brand": "VocalEyes",
-  "tagline": "Speak with your eyes",
+  "brand": "VisualEyes",
+  "tagline": "Speak with your head",
   "brief": "A webcam eye-gaze communication tool for people who have lost speech. It must feel warm, dignified and calm, never clinical, and read clearly at app-icon and favicon size.",
   "adjectives": ["warm", "dignified", "calm", "human", "accessible"],
   "criteria": "Success: unlike the usual blue medical or eye-icon marks, recognisable at 24 px, works in one colour and reversed, says 'seeing becomes saying' in one glance.",
@@ -15,14 +15,14 @@
   "concepts": [
     {
       "name": "Eye Bubble",
-      "symbol": "vocaleyes-symbol.svg",
-      "lockup": "vocaleyes-horizontal.svg",
-      "stacked": "vocaleyes-stacked.svg",
-      "avatar": "vocaleyes-app-icon.svg",
-      "symbol_on_tile": "vocaleyes-symbol-reversed.svg",
-      "symbol_on_dark": "vocaleyes-symbol-reversed.svg",
-      "lockup_on_dark": "vocaleyes-horizontal-reversed.svg",
-      "stacked_on_dark": "vocaleyes-stacked-reversed.svg",
+      "symbol": "visualeyes-symbol.svg",
+      "lockup": "visualeyes-horizontal.svg",
+      "stacked": "visualeyes-stacked.svg",
+      "avatar": "visualeyes-app-icon.svg",
+      "symbol_on_tile": "visualeyes-symbol-reversed.svg",
+      "symbol_on_dark": "visualeyes-symbol-reversed.svg",
+      "lockup_on_dark": "visualeyes-horizontal-reversed.svg",
+      "stacked_on_dark": "visualeyes-stacked-reversed.svg",
       "idea": "An eye that is also a speech bubble: seeing becomes saying.",
       "rationale": [
         "One idea in one glance: the product is gaze turned into voice.",
@@ -33,5 +33,5 @@
     }
   ],
   "recommendation": "Use the full-colour symbol on light backgrounds, the reversed symbol on teal or dark, and the tile version for favicons and app icons.",
-  "next_steps": ["Trademark and font-licence check", "Add to the VocalEyes app header and demo video", "Review colour proofs in print"]
+  "next_steps": ["Trademark and font-licence check", "Add to the VisualEyes app header and demo video", "Review colour proofs in print"]
 }

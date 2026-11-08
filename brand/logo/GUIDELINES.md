@@ -1,4 +1,4 @@
-# VocalEyes — Logo guidelines (compact)
+# VisualEyes — Logo guidelines (compact)
 
 ## 1. The logo
 
@@ -8,11 +8,11 @@
 
 | Version | Use it for |
 |---|---|
-| Horizontal (`vocaleyes-horizontal.svg`) | Primary. Headers, slides, documents, the demo video. |
-| Stacked (`vocaleyes-stacked.svg`) | Tall or square spaces, posters, title cards. |
-| Symbol (`vocaleyes-symbol.svg`) | Avatars, in-app mark, anywhere the name is already shown. |
-| Wordmark (`vocaleyes-wordmark.svg`) | Only when the symbol sits right next to it. |
-| App icon / tile (`vocaleyes-app-icon.svg`) | Favicon, home screen, anything 16–32 px. |
+| Horizontal (`visualeyes-horizontal.svg`) | Primary. Headers, slides, documents, the demo video. |
+| Stacked (`visualeyes-stacked.svg`) | Tall or square spaces, posters, title cards. |
+| Symbol (`visualeyes-symbol.svg`) | Avatars, in-app mark, anywhere the name is already shown. |
+| Wordmark (`visualeyes-wordmark.svg`) | Only when the symbol sits right next to it. |
+| App icon / tile (`visualeyes-app-icon.svg`) | Favicon, home screen, anything 16–32 px. |
 
 Every version also exists as `-reversed` (for teal or dark backgrounds) and in `export/` as black, white and one-colour teal.
 
@@ -49,7 +49,7 @@ Never put the full-colour symbol on teal or black: the teal bubble disappears. U
 
 ## 5. Typography
 
-The wordmark is custom-drawn from geometric strokes (outlined paths, no font needed). It is not a typeface, so do not retype "VocalEyes" to imitate it; always use the file.
+The wordmark is custom-drawn from geometric strokes (outlined paths, no font needed). It is not a typeface, so do not retype "VisualEyes" to imitate it; always use the file.
 Suggested UI pairing: a rounded geometric sans such as Nunito or Quicksand (both open-licence on Google Fonts). Confirm the licence before embedding in a product.
 
 ## 6. Don'ts

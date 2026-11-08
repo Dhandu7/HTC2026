@@ -1,6 +1,6 @@
 # Hosted voice service
 
-Lets a person create a voice from their own recordings and have VocalEyes speak in it. **ElevenLabs** clones the
+Lets a person create a voice from their own recordings and have VisualEyes speak in it. **ElevenLabs** clones the
 voice and makes the speech (on its servers). This service keeps what ElevenLabs does not know, in **DynamoDB**: which
 user owns which voice, their consent, their settings, where the voice is in its lifecycle, and the account's
 voice-slot cap.

@@ -87,14 +87,14 @@ app.whenReady().then(async () => {
 
   const tray = new Tray(nativeImage.createEmpty());
   tray.setTitle("👁");
-  tray.setToolTip("VocalEyes");
+  tray.setToolTip("VisualEyes");
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: `Show / hide (${SHORTCUT})`, click: () => setExpanded(!expanded) },
       { label: "Reload", click: () => win?.reload() },
       { label: "DevTools", click: () => win?.webContents.openDevTools({ mode: "detach" }) },
       { type: "separator" },
-      { label: "Quit VocalEyes", click: () => app.quit() },
+      { label: "Quit VisualEyes", click: () => app.quit() },
     ]),
   );
 
