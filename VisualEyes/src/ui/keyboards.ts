@@ -4,6 +4,7 @@
 //  - BaselineKeyboard: a standard letter-by-letter dwell QWERTY (optional word chips).
 import { LETTER_GROUPS, tokenize, type PredictionEngine, type Slot, type Suggestion } from "../predict/engine";
 import { llmPredict } from "../predict/llm";
+import { containsSlur, isSlur, SLUR_NOTICE } from "../safety/slurs";
 import type { EventKind } from "../metrics/session";
 
 export interface KeyboardHost {
@@ -15,6 +16,8 @@ export interface KeyboardHost {
   /** Profiles the user can switch between by gaze. */
   profiles(): { id: string; name: string }[];
   activeProfileId(): string;
+  /** A short message for the user (e.g. why a word was blocked). */
+  notice(message: string): void;
 }
 
 export interface Keyboard {
@@ -99,7 +102,7 @@ export class GazeTypeKeyboard implements Keyboard {
       const text = this.text();
       this.llmTimer = setTimeout(() => {
         const ctrl = (this.llmAbort = new AbortController());
-        void llmPredict({ task: "continue", text, history: this.engine.topPhrases(8), n: 2 }, ctrl.signal).then((s) => {
+        void llmPredict({ task: "continue", text, history: this.engine.recentSentences(8), n: 2 }, ctrl.signal).then((s) => {
         if (seq !== this.llmSeq) return;
         this.llmChips = s
           .map((full) => full.trim())
@@ -198,12 +201,23 @@ export class GazeTypeKeyboard implements Keyboard {
   }
 
   private commitWord(w: string) {
+    // Slurs can't be entered, however they're typed (suggestions never offer them; this catches spell mode).
+    if (isSlur(w)) {
+      this.slots = [];
+      this.host.notice(SLUR_NOTICE);
+      return;
+    }
     const shown = this.engine.display(w);
     this.committed.push(this.committed.length === 0 ? cap(shown) : w === "i" ? "I" : shown);
     this.slots = [];
   }
 
   private commitSentence(full: string) {
+    if (containsSlur(full)) {
+      this.slots = [];
+      this.host.notice(SLUR_NOTICE);
+      return;
+    }
     const words = full.trim().split(/\s+/).map((w) => (w === "i" ? "I" : w));
     if (words.length) words[0] = cap(words[0]);
     this.committed = words;
@@ -218,7 +232,7 @@ export class GazeTypeKeyboard implements Keyboard {
       const seq = ++this.llmSeq;
       this.cancelLlm();
       const ctrl = (this.llmAbort = new AbortController());
-      void llmPredict({ task: "expand", text: this.text(), slots, history: this.engine.topPhrases(8), n: 4 }, ctrl.signal).then((s) => {
+      void llmPredict({ task: "expand", text: this.text(), slots, history: this.engine.recentSentences(8), n: 4 }, ctrl.signal).then((s) => {
         if (seq !== this.llmSeq || this.panel !== "phrases") return;
         const have = new Set(this.panelItems.map((p) => p.text.toLowerCase()));
         for (const full of s) if (!have.has(full.toLowerCase())) this.panelItems.push({ kind: "llm", label: full, text: full, score: 0 });
@@ -387,8 +401,15 @@ export class BaselineKeyboard implements Keyboard {
       this.value += this.value.length === 0 ? arg.toUpperCase() : arg;
       ev = "letter";
     } else if (kind === "space") {
-      this.value += " ";
-      ev = "space";
+      const last = this.value.match(/\S+$/)?.[0] ?? "";
+      if (isSlur(last)) {
+        this.value = this.value.slice(0, this.value.length - last.length); // remove the word, not just block the space
+        this.host.notice(SLUR_NOTICE);
+        ev = "delete";
+      } else {
+        this.value += " ";
+        ev = "space";
+      }
     } else if (kind === "del") {
       this.value = this.value.slice(0, -1);
       ev = "delete";

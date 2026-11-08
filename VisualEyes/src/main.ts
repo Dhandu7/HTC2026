@@ -1,3 +1,4 @@
+import { containsSlur, SLUR_NOTICE } from "./safety/slurs";
 import "./style.css";
 import { FaceTracker } from "./gaze/tracker";
 import { GazeEngine, type GazePoint } from "./gaze/engine";
@@ -134,6 +135,7 @@ const host: KeyboardHost = {
   overlay: isOverlay,
   profiles: () => profiles.list(),
   activeProfileId: () => profiles.active.id,
+  notice: (m) => showToast(m, 3500),
 };
 const gazeKb = new GazeTypeKeyboard(predictor, host);
 const baseKb = new BaselineKeyboard(predictor, host, settings.baselinePrediction);
@@ -486,11 +488,17 @@ function voiceStatusText(): string {
 
 function speak(text: string) {
   if (!text.trim()) return;
+  if (containsSlur(text)) return void showToast(SLUR_NOTICE, 3500); // also covers voice commands
   void voice.speak(text);
 }
 
 async function doAction(a: string) {
   const text = kb.text().trim();
+  // Last line of defence for anything that leaves the app (works for every keyboard, typed any way).
+  if ((a === "speak" || a === "insert" || a === "copy") && containsSlur(text)) {
+    showToast(SLUR_NOTICE, 3500);
+    return;
+  }
   if (a.startsWith("profile:")) {
     switchProfile(a.slice("profile:".length));
     showToast(`Now typing as <b>${esc(profiles.active.name)}</b>`);

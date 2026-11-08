@@ -23,6 +23,7 @@ import { z } from "zod";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { fileURLToPath } from "node:url";
 import { elevenModel, elevenSpeak, voiceConfigured } from "./elevenlabs";
+import { containsSlur, stripSlurs } from "../src/safety/slurs";
 
 // Load VisualEyes/.env (ANTHROPIC_API_KEY etc.). Variables already set in the shell win.
 try {
@@ -59,8 +60,14 @@ const Request = z.object({
   profile: Profile.optional(),
 });
 
-const SYSTEM = `You help a person who communicates with an eye-gaze keyboard (for example, someone with ALS or locked-in syndrome). Each selection costs them several seconds of effort, so good suggestions save real time.
-Write in the first person, as the user, in their voice. Prefer short, plain, everyday sentences people really say to carers, family and friends. Use the user's recent sentences as a guide to their vocabulary and concerns. Never add commentary; return only the suggestions.`;
+const SYSTEM = `You predict how a person will finish the sentence they are typing with an eye-gaze keyboard (for example, someone with ALS or locked-in syndrome). Each selection costs them several seconds of effort, so a good prediction saves real time; a wrong or odd one costs a glance.
+Rules:
+- Write in the first person, as the user, in their voice: match their spelling, capitalisation, punctuation, slang and sentence length exactly as their writing samples show.
+- Use the writing samples for HOW they write, not WHAT to say. Do not repeat a sample sentence; the keyboard already offers those. Predict what this person is most likely saying now, given the words already typed.
+- Continue the typed words naturally and grammatically. Keep each continuation short: usually 2 to 8 words, never more than 12.
+- Order suggestions from most to least likely, and make them clearly different from each other.
+- Fit the person's life as described (who they live with, what they can do, what they care about). Use only the names you are given; never invent people.
+- Return only the suggestions, no commentary.`;
 
 /**
  * Profile block. It must be byte-identical between requests for the same profile, or the
@@ -80,13 +87,21 @@ function profileBlock(p: z.infer<typeof Profile>): string {
 }
 
 function prompt(r: z.infer<typeof Request>): string {
-  const hist = r.history.length ? `Recent things the user said:\n${r.history.map((h) => `- ${h}`).join("\n")}\n\n` : "";
+  const hist = r.history.length ? `What the user said most recently (newest first):\n${r.history.map((h) => `- ${h}`).join("\n")}\n\n` : "";
   if (r.task === "continue") {
-    return `${hist}The user has typed: "${r.text}"\nSuggest ${r.n} different likely ways to finish this sentence. Each suggestion must be the complete sentence, starting with exactly the words already typed.`;
+    return `${hist}The user has typed: "${r.text}"\nSuggest ${r.n + EXTRA} different likely ways to finish this sentence, most likely first. Each suggestion must be the complete sentence, starting with exactly the words already typed.`;
   }
   const pattern = r.slots.map((s, i) => `word ${i + 1} starts with one of: ${s.split("").join(" ")}`).join("\n");
   return `${hist}The user typed an abbreviation: one key per word, where each key stands for a group of letters.\n${pattern}\nSuggest ${r.n} different likely sentences with exactly ${r.slots.length} words that fit this pattern${r.text ? `, continuing after: "${r.text}"` : ""}.`;
 }
+
+/** Ask for a few spare suggestions, so dropping repeats of things the keyboard already offers still leaves n. */
+const EXTRA = 2;
+/** A continuation longer than this is not a quick suggestion any more. */
+const MAX_CONTINUATION_WORDS = 12;
+/** GAZETYPE_AI_REPEATS=drop removes suggestions that repeat a writing sample or recent sentence word for word. */
+const DROP_REPEATS = (process.env.GAZETYPE_AI_REPEATS ?? "allow") === "drop";
+const norm = (s: string) => (s.toLowerCase().match(/[a-z0-9']+/g) ?? []).join(" ");
 
 const initialsFit = (s: string, slots: string[]) => {
   const words = s.toLowerCase().match(/[a-z']+/g) ?? [];
@@ -96,6 +111,18 @@ const initialsFit = (s: string, slots: string[]) => {
 async function predict(r: z.infer<typeof Request>): Promise<{ suggestions: string[]; model: string; cachedTokens: number }> {
   const model = r.task === "continue" ? FAST_MODEL : MODEL;
   const fast = model.startsWith("claude-haiku");
+  // Slurs are blocked: never sent to the model as context, never returned as a suggestion.
+  if (containsSlur(r.text)) return { suggestions: [], model, cachedTokens: 0 };
+  r = {
+    ...r,
+    history: r.history.filter((h) => !containsSlur(h)),
+    profile: r.profile && {
+      ...r.profile,
+      about: stripSlurs(r.profile.about),
+      people: r.profile.people.filter((p) => !containsSlur(p)),
+      samples: r.profile.samples.filter((s) => !containsSlur(s)),
+    },
+  };
   const pb = r.profile ? profileBlock(r.profile) : "";
   const system: Anthropic.Beta.BetaTextBlockParam[] = [{ type: "text", text: SYSTEM }];
   // Cache the whole system prefix (instructions + profile). Short prefixes simply don't cache.
@@ -116,10 +143,19 @@ async function predict(r: z.infer<typeof Request>): Promise<{ suggestions: strin
   const cachedTokens = response.usage.cache_read_input_tokens ?? 0;
   if (response.stop_reason === "refusal") return { suggestions: [], model, cachedTokens };
   const out = response.parsed_output?.suggestions ?? [];
+  // The keyboard's phrase chips already offer the user's own past sentences, so an AI chip that only
+  // repeats one wastes the slot: keep new sentences only.
+  const known = new Set([...(r.profile?.samples ?? []), ...r.history].map(norm));
+  const typed = r.text.trim().toLowerCase();
+  const clean = out.filter((s) => !containsSlur(s));
   const valid =
     r.task === "expand"
-      ? out.filter((s) => initialsFit(s, r.slots))
-      : out.filter((s) => s.toLowerCase().startsWith(r.text.trim().toLowerCase()));
+      ? clean.filter((s) => initialsFit(s, r.slots))
+      : clean.filter((s) => {
+          if (!s.toLowerCase().startsWith(typed)) return false;
+          const rest = norm(s.slice(typed.length));
+          return rest.length > 0 && rest.split(" ").length <= MAX_CONTINUATION_WORDS && !(DROP_REPEATS && known.has(norm(s)));
+        });
   return { suggestions: [...new Set(valid)].slice(0, r.n), model, cachedTokens };
 }
 
@@ -150,12 +186,18 @@ createServer(async (req, res) => {
     for await (const chunk of req) body += chunk;
     const started = Date.now();
     try {
+      const { text } = SpeakRequest.parse(JSON.parse(body || "{}"));
+      // Checked first, so slurs are refused whatever the voice configuration.
+      if (containsSlur(text)) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: "blocked: the text contains a slur" }));
+        return;
+      }
       if (!voiceConfigured()) {
         res.statusCode = 503;
         res.end(JSON.stringify({ error: "Set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID in VisualEyes/.env" }));
         return;
       }
-      const { text } = SpeakRequest.parse(JSON.parse(body || "{}"));
       const audio = Buffer.from(await elevenSpeak(text));
       console.log(`[gazetype-llm] speak ${text.length} chars ${Date.now() - started} ms`);
       res.setHeader("Content-Type", "audio/mpeg");
