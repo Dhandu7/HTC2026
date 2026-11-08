@@ -129,3 +129,24 @@ def test_key_check_warns_when_the_stored_value_is_not_a_key_and_never_shows_it(b
     assert "does not start with sk_" not in r.stdout and "looks_right" not in r.stdout
     r = run(box, "key-check", env_file_text="ELEVENLABS_API_KEY=\n", keychain="idonly_KC_VALUE")
     assert "does not start with sk_" in r.stdout and "KC_VALUE" not in r.stdout + r.stderr and "the Keychain" in r.stdout
+
+
+def test_local_refuses_to_start_without_a_key_and_says_what_to_do(box):
+    r = run(box, "local", env_file_text="OTHER=1\n")
+    assert r.returncode == 1 and "POC/.env" in r.stderr
+
+
+def test_local_serves_with_the_key_from_the_env_file_and_safe_local_defaults(box):
+    echo = box / "fakepython"
+    echo.write_text('#!/bin/sh\nprintf "%s|%s|%s|%s" "$ELEVENLABS_API_KEY" "$VOICE_STORE" "$AUTH_MODE" "$CORS_ORIGINS"\n')
+    r = run(box, "local", env_file_text="ELEVENLABS_API_KEY=sk_test_LOCAL\n")
+    assert r.returncode == 0
+    assert r.stdout.splitlines()[-1] == "sk_test_LOCAL|memory|dev|http://localhost:5173,http://127.0.0.1:5173"
+    assert "SECRET" not in r.stdout + r.stderr
+
+
+def test_local_lets_the_caller_override_the_defaults(box):
+    echo = box / "fakepython"
+    echo.write_text('#!/bin/sh\nprintf "%s|%s" "$VOICE_STORE" "$CORS_ORIGINS"\n')
+    r = run(box, "local", env_file_text="ELEVENLABS_API_KEY=sk_x\n", extra_env={"VOICE_STORE": "dynamodb", "CORS_ORIGINS": "http://example.test"})
+    assert r.stdout.splitlines()[-1] == "dynamodb|http://example.test"

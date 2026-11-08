@@ -1,3 +1,5 @@
+> **Not used by the app any more.** Speak now uses each user's own voice from **🗣 My voice** (see `voice-sidecar/README.md`), not a fixed `ELEVENLABS_VOICE_ID`. This describes the older single-voice server flow, which is still in the repo.
+
 # Speaking in the user's own voice (ElevenLabs)
 
 When ElevenLabs is set up, **🔊 Speak** says the sentence in the user's **cloned voice**. If it isn't set up, or ElevenLabs is slow (over 6 s) or fails, the same sentence is spoken in the system voice, so the user is never left silent.

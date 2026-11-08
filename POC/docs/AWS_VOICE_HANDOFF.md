@@ -35,7 +35,7 @@ Read on 7 Nov 2026 from their docs and help center; re-check before relying on t
 
 ## 3. What is built and tested (application side)
 
-All in `POC/voice-sidecar/`. `./hosted.sh setup` then `./hosted.sh test` runs **196 tests with no AWS account and no ElevenLabs key**.
+All in `POC/voice-sidecar/`. `./hosted.sh setup` then `./hosted.sh test` runs **199 tests with no AWS account and no ElevenLabs key**.
 
 | Piece | File | Notes |
 |---|---|---|
@@ -146,7 +146,7 @@ Single table, on-demand.
 ## 9. How to verify end to end once things exist
 
 ```bash
-cd POC/voice-sidecar && ./hosted.sh setup && ./hosted.sh test            # 196 tests, no cloud needed
+cd POC/voice-sidecar && ./hosted.sh setup && ./hosted.sh test            # 199 tests, no cloud needed
 VOICE_TABLE_NAME=... AWS_REGION=... ./hosted.sh check-table              # the real table
 ELEVENLABS_API_KEY=... ./hosted.sh smoke --clip my-voice.wav --i-am-the-voice-owner   # whoever holds the key
 ```

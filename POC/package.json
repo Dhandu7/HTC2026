@@ -10,6 +10,8 @@
     "dev": "vite",
     "dev:all": "concurrently -k -n web,llm \"vite\" \"tsx server/llm.ts\"",
     "llm": "tsx server/llm.ts",
+    "voice": "bash voice-sidecar/hosted.sh local",
+    "dev:voice": "concurrently -k -n web,llm,voice \"vite\" \"tsx server/llm.ts\" \"bash voice-sidecar/hosted.sh local\"",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",

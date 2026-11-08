@@ -8,6 +8,7 @@
 #   ./hosted.sh dev       whole stack on your laptop with a FAKE ElevenLabs: no key, no AWS
 #   ./hosted.sh test      run the tests (no AWS account or ElevenLabs key needed)
 #   ./hosted.sh check-table  run the lifecycle check against the REAL DynamoDB table (needs AWS credentials)
+#   ./hosted.sh local     run the API on YOUR machine for the app (sets up Python if needed, in-memory, test login, your key)
 #   ./hosted.sh serve     run the API (reads configuration from the environment, see README)
 #   ./hosted.sh reconcile retry stuck deletes and release stale reservations (schedule this in AWS)
 #   ./hosted.sh config    show the effective configuration, never a secret value
@@ -78,6 +79,20 @@ case "${1:-}" in
     # makes tones, not speech. For building and trying the app screens.
     shift; exec "$PY" scripts/dev_stack.py "$@" ;;
   test)  shift; exec "$PY" -m pytest -q tests_hosted "$@" ;;
+  local)
+    # The one command a teammate needs: first run installs Python 3.12 deps, then serves the API for the app on
+    # this machine only (127.0.0.1, in memory, the dev test login). Anything you set yourself still wins.
+    shift
+    [ -x "$PY" ] || "$0" setup
+    export VOICE_STORE="${VOICE_STORE:-memory}" AUTH_MODE="${AUTH_MODE:-dev}"
+    export CORS_ORIGINS="${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}"
+    load_key
+    if [ -z "${ELEVENLABS_API_KEY:-}" ] && [ -z "${ELEVENLABS_SECRET_ID:-}" ]; then
+      echo "No ElevenLabs key found. Copy POC/.env.example to POC/.env and put your key after ELEVENLABS_API_KEY= (it starts with sk_), or run ./hosted.sh key-set. Then run this again." >&2
+      exit 1
+    fi
+    echo "Voice service for this machine only: voices are kept in memory, so they are forgotten when this stops."
+    exec "$PY" -m voice_sidecar.hosted_main serve "$@" ;;
   serve) shift; load_key; exec "$PY" -m voice_sidecar.hosted_main serve "$@" ;;
   reconcile) shift; load_key; exec "$PY" -m voice_sidecar.hosted_main reconcile "$@" ;;
   config) shift; load_key; exec "$PY" -m voice_sidecar.hosted_main check-config "$@" ;;
@@ -90,5 +105,5 @@ for step in check_store(DynamoRecordStore(t, region=os.environ.get('AWS_REGION')
 print('table', t, 'passed')" ;;
   doctor) shift; load_key; exec "$PY" -m voice_sidecar.doctor "$@" ;;
   smoke) shift; load_key; exec "$PY" scripts/elevenlabs_smoke.py "$@" ;;
-  *) echo "usage: ./hosted.sh setup|test|dev|key-set|key-check|key-delete|doctor|serve|reconcile|config|check-table|smoke" >&2; exit 2 ;;
+  *) echo "usage: ./hosted.sh setup|local|test|dev|key-set|key-check|key-delete|doctor|serve|reconcile|config|check-table|smoke" >&2; exit 2 ;;
 esac

@@ -12,7 +12,7 @@ Why the local engines (OpenVoice, Chatterbox) were dropped, with the measurement
 
 ```bash
 ./hosted.sh setup        # .venv-hosted, Python 3.12, about 160 MB
-./hosted.sh test         # 196 tests; no AWS account and no ElevenLabs key needed
+./hosted.sh test         # 199 tests; no AWS account and no ElevenLabs key needed
 
 # try the app screens with NO key and no AWS: the service plus a fake ElevenLabs that makes tones, not speech
 ./hosted.sh dev          # then, in another terminal:  cd POC && npm run dev   and open the app's "🗣 My voice" button
