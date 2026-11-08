@@ -1,0 +1,93 @@
+# Auto-deploy VisualEyes to the EC2 server on every push/merge to main.
+# Copy this file to .github/workflows/deploy.yml in the repo (see deploy/README.md).
+#
+# Needs these repository secrets (created by deploy/3-github-setup.sh):
+#   AWS_ROLE_ARN     role GitHub assumes (can only open/close SSH on our security group)
+#   EC2_SG_ID        the server's security group
+#   EC2_HOST         the server's IP
+#   EC2_DOMAIN       e.g. 34-196-250-93.sslip.io
+#   EC2_SSH_KEY      contents of visualeyes-key.pem
+#   EC2_KNOWN_HOSTS  the server's SSH host key (so we only ever talk to our server)
+# Optional repository variables: APP_DIR (default VisualEyes), AWS_REGION (default us-east-1)
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # also allows a manual "Run workflow" button
+
+permissions:
+  id-token: write # short-lived AWS login via OIDC (no AWS keys stored in GitHub)
+  contents: read
+
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: false # never interrupt a deploy halfway
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      APP_DIR: ${{ vars.APP_DIR || 'VisualEyes' }}
+      HOST: ${{ secrets.EC2_HOST }}
+      DOMAIN: ${{ secrets.EC2_DOMAIN }}
+      SG_ID: ${{ secrets.EC2_SG_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the app folder exists on this branch
+        run: |
+          test -f "$APP_DIR/package.json" || {
+            echo "::error::No $APP_DIR/package.json on this branch. Set the APP_DIR repository variable to the app folder."
+            exit 1
+          }
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Let this runner SSH in (removed at the end)
+        id: runner
+        run: |
+          IP=$(curl -fsS https://checkip.amazonaws.com)
+          echo "ip=$IP" >> "$GITHUB_OUTPUT"
+          aws ec2 authorize-security-group-ingress --group-id "$SG_ID" \
+            --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=$IP/32,Description=github-actions-deploy}]"
+
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/ec2.pem && chmod 600 ~/.ssh/ec2.pem
+          printf '%s\n' "$KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          # Wait until the new firewall rule is active
+          for i in $(seq 1 12); do ssh -i ~/.ssh/ec2.pem -o ConnectTimeout=5 "ubuntu@$HOST" true && break; sleep 5; done
+
+      - name: Upload the app
+        run: |
+          rsync -az --delete \
+            --exclude node_modules --exclude dist --exclude .env --exclude .DS_Store \
+            --exclude public/mediapipe --exclude public/models \
+            -e "ssh -i $HOME/.ssh/ec2.pem" \
+            "$APP_DIR/" "ubuntu@$HOST:app/"
+
+      - name: Build and restart on the server
+        # Reuses ~/server-setup.sh, installed by deploy/2-deploy.sh. It doesn't prompt once the
+        # API key and site password exist; </dev/null makes it fail rather than hang if they don't.
+        run: ssh -i ~/.ssh/ec2.pem "ubuntu@$HOST" "bash ~/server-setup.sh '$DOMAIN'" </dev/null
+
+      - name: Check the site responds
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://$DOMAIN/")
+          echo "https://$DOMAIN/ -> HTTP $code (401 = up and password-protected)"
+          [ "$code" = "401" ] || [ "$code" = "200" ]
+
+      - name: Remove this runner's SSH access
+        if: always() && steps.runner.outputs.ip != ''
+        run: |
+          aws ec2 revoke-security-group-ingress --group-id "$SG_ID" \
+            --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${{ steps.runner.outputs.ip }}/32}]" || true

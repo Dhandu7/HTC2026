@@ -4,7 +4,7 @@
     {
       "name": "gazetype-web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "POC", "run", "dev:all"],
+      "runtimeArgs": ["--prefix", "VisualEyes", "run", "dev:all"],
       "port": 5173
     }
   ]
