@@ -23,6 +23,10 @@ describe("format", () => {
     expect(full.filter((t) => t.segment === "cal")).toHaveLength(25);
     expect(full.filter((t) => t.segment === "val")).toHaveLength(16);
     expect(full.filter((t) => t.segment === "drift")).toHaveLength(48);
+    const quick = buildProtocol("quick");
+    expect(quick.filter((t) => t.segment === "cal")).toHaveLength(25);
+    expect(quick.filter((t) => t.segment === "val")).toHaveLength(8);
+    expect(quick.filter((t) => t.segment === "drift")).toHaveLength(0);
     const short = buildProtocol("short");
     expect(short.filter((t) => t.segment === "cal")).toHaveLength(9);
     expect(short.filter((t) => t.segment === "drift")).toHaveLength(0);
@@ -76,9 +80,10 @@ describe("replay", () => {
     const best = rows.find((r) => r.calSet === "25pt" && r.source.startsWith("ridge λ=0.1"))!;
     expect(best.stats.accuracyPx).toBeLessThan(40);
     expect(best.stats.hitRate["6-chip (3x2)"]).toBeGreaterThan(0.95);
-    expect(rows.some((r) => r.source.includes("(app)"))).toBe(true);
+    expect(rows.some((r) => r.calSet === "13pt")).toBe(true);
     const drift = driftRows(p);
-    expect(drift.map((r) => r.testSet)).toEqual(["+0 min", "+2 min", "+5 min", "+10 min"]);
+    expect([...new Set(drift.map((r) => r.testSet))]).toEqual(["+0 min", "+2 min", "+5 min", "+10 min"]);
+    expect(drift.some((r) => r.source.endsWith("+ re-centre"))).toBe(true);
   });
 
   it("runs the leave-one-participant-out pooled comparison", () => {
@@ -90,5 +95,17 @@ describe("replay", () => {
     // The stranger's eyes are shifted; a 9-point offset correction must beat the uncorrected prior.
     expect(offset.stats.accuracyPx).toBeLessThan(priorOnly.stats.accuracyPx);
     expect(rows.some((r) => r.source.startsWith("prior + fine-tune"))).toBe(true);
+  });
+});
+
+describe("dwell simulation", () => {
+  it("selects the button under each dot on a clean synthetic session", async () => {
+    const { simulateDwell, APP_DWELL, buttonsAround } = await import("../src/eval/dwell");
+    const { calPoints, ridge } = await import("../src/eval/replay");
+    const p = prepare(fakeSession("a", "full", { gain: 1, bias: 0 }), "a");
+    const predict = ridge(calPoints(p, "25pt"), 0.1)!;
+    const d = simulateDwell(p.val, predict, { ...APP_DWELL, dwellMs: 300, layout: { name: "6", cols: 3, rows: 2 } });
+    expect(d.correct).toBeGreaterThan(0.9);
+    expect(buttonsAround(750, 450, 1500, 900, { name: "6", cols: 3, rows: 2 }, 0).some((r) => r.id === "0,0")).toBe(true);
   });
 });

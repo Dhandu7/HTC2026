@@ -3,6 +3,7 @@ import { GazeRegressor, solve } from "../src/gaze/regression";
 import { PointFilter } from "../src/gaze/oneEuro";
 import { estimateDistanceCm, pxToDegrees, degreesToPx, summarizeErrors } from "../src/gaze/accuracy";
 import { headPose } from "../src/gaze/features";
+import { KernelGazeRegressor, choleskySolve } from "../src/gaze/kernel";
 
 describe("solve", () => {
   it("solves a 3x3 system", () => {
@@ -72,5 +73,40 @@ describe("headPose", () => {
     expect(p.yaw).toBeCloseTo(0);
     expect(p.pitch).toBeCloseTo(0);
     expect(p.roll).toBeCloseTo(0);
+  });
+});
+
+describe("KernelGazeRegressor", () => {
+  it("solves SPD systems with several right-hand sides", () => {
+    const [x, y] = choleskySolve([[4, 1], [1, 3]], [[1, 2], [3, 4]]);
+    expect(4 * x[0] + x[1]).toBeCloseTo(1);
+    expect(x[0] + 3 * x[1]).toBeCloseTo(2);
+    expect(4 * y[0] + y[1]).toBeCloseTo(3);
+  });
+
+  it("fits a non-linear mapping on held-out points", () => {
+    const f = (a: number, b: number) => ({ x: 800 + 900 * a + 300 * Math.sin(2 * a), y: 450 + 700 * b * (1 + 0.3 * a) });
+    const samples = [];
+    for (let a = -0.5; a <= 0.5; a += 0.25) for (let b = -0.5; b <= 0.5; b += 0.25) samples.push({ features: [a, b], ...f(a, b) });
+    const k = new KernelGazeRegressor(0.01, 0.3);
+    k.fit(samples);
+    const p = k.predict([0.125, -0.125]);
+    const t = f(0.125, -0.125);
+    expect(Math.hypot(p.x - t.x, p.y - t.y)).toBeLessThan(30);
+  });
+});
+
+describe("AccumulatingDwellSelector", () => {
+  it("keeps progress through a brief slip off the target, and drains a passing neighbour", async () => {
+    const { AccumulatingDwellSelector } = await import("../src/input/selection");
+    const d = new AccumulatingDwellSelector(300, 0.5);
+    let t = 0;
+    const step = (target: string | null) => d.update((t += 33), target);
+    for (let i = 0; i < 5; i++) step("b"); // pass over neighbour b
+    for (let i = 0; i < 6; i++) step("a");
+    step(null); // one-frame slip
+    let fired: string | null = null;
+    for (let i = 0; i < 6 && !fired; i++) fired = step("a").selected;
+    expect(fired).toBe("a");
   });
 });

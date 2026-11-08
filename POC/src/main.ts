@@ -1,16 +1,17 @@
 import "./style.css";
 import { FaceTracker } from "./gaze/tracker";
-import { GazeEngine, type GazePoint } from "./gaze/engine";
+import { GazeEngine, type GazeModel, type GazePoint } from "./gaze/engine";
 import { estimateDistanceCm, type ErrorStats, type ViewingGeometry } from "./gaze/accuracy";
-import { runCalibration } from "./ui/calibration";
-import { BlinkSelector, DwellSelector, TargetTracker, type Rect, type SelectionMode } from "./input/selection";
+import { runCalibration, type CalibrationSize } from "./ui/calibration";
+import { AccumulatingDwellSelector, BlinkSelector, TargetTracker, type Rect, type SelectionMode } from "./input/selection";
 import { PredictionEngine } from "./predict/engine";
 import { CORE_WORDS, SEED_PHRASES, BENCHMARK_SENTENCES } from "./predict/vocab";
 import { llmAvailable } from "./predict/llm";
 import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost } from "./ui/keyboards";
 import { TypingSession, normalizeText, type RunResult } from "./metrics/session";
 import { startVoiceCommands } from "./input/voice";
-import { recordSession } from "./record/recorder";
+import { download, recordSession } from "./record/recorder";
+import { SessionTape } from "./record/tape";
 import type { SessionMeta } from "./record/format";
 
 // ---------- Electron bridge (absent in the browser) ----------
@@ -33,6 +34,10 @@ interface Settings {
   screenDiagonalIn: number;
   distanceCm: number; // 0 = estimate from iris size
   hfovDeg: number;
+  calPoints: CalibrationSize;
+  model: GazeModel;
+  saveCalibrations: boolean;
+  participant: string;
   showCursor: boolean;
   hotCorner: boolean;
   voice: boolean;
@@ -45,6 +50,10 @@ const DEFAULTS: Settings = {
   screenDiagonalIn: 14,
   distanceCm: 0,
   hfovDeg: 60,
+  calPoints: 25,
+  model: "kernel",
+  saveCalibrations: true,
+  participant: "",
   showCursor: true,
   hotCorner: true,
   voice: false,
@@ -85,6 +94,7 @@ function showToast(html: string, ms = 4000) {
 
 // ---------- core objects ----------
 const gaze = new GazeEngine();
+gaze.setModel(settings.model);
 const tracker = new FaceTracker($("#video"));
 tracker.onFrame = gaze.handleFrame;
 const predictor = new PredictionEngine({
@@ -99,8 +109,11 @@ const gazeKb = new GazeTypeKeyboard(predictor, host);
 const baseKb = new BaselineKeyboard(predictor, host, settings.baselinePrediction);
 let kb: GazeTypeKeyboard | BaselineKeyboard = gazeKb;
 
-const targetTracker = new TargetTracker(36, 90);
-const dwell = new DwellSelector(settings.dwellMs);
+// Switch 200 ms + accumulating dwell (decay 0.5): in dwell simulation on recordings this
+// turned most timed-out looks into correct selections (77% -> 84% correct) without adding
+// wrong ones. See POC/src/eval/dwell.ts.
+const targetTracker = new TargetTracker(36, 200);
+const dwell = new AccumulatingDwellSelector(settings.dwellMs, 0.5);
 const blink = new BlinkSelector();
 let session = new TypingSession(kb.name, settings.selectionMode);
 let benchmark: { index: number; target: string } | null = null;
@@ -143,6 +156,11 @@ function updateStatus() {
     gaze.source === "camera" ? (gaze.faceVisible ? `<b class="ok">● face</b>` : `<b class="bad">● no face</b>`) : `<b>🖱 mouse</b>`,
     gaze.source === "camera" ? `${tracker.fps} fps · ${gaze.inferMs.toFixed(0)} ms` : "",
     lastError ? `error ${lastError.meanDeg.toFixed(1)}° (±${lastError.precisionDeg.toFixed(1)}°)` : gaze.source === "camera" ? "not calibrated" : "",
+    gaze.source === "camera" && gaze.calibrated
+      ? gaze.lastPoint.confidence < 0.5
+        ? `<b class="bad">● moved since calibrating</b>`
+        : `<b class="ok">● posture ok</b>`
+      : "",
     gaze.source === "camera" ? `${g.distanceCm.toFixed(0)} cm${settings.distanceCm ? "" : " est."}` : "",
     gaze.implicitCount ? `+${gaze.implicitCount} auto-cal` : "",
     `${settings.selectionMode}${settings.selectionMode === "dwell" ? ` ${kb === gazeKb ? settings.dwellMs : settings.baselineDwellMs} ms` : ""}`,
@@ -198,6 +216,7 @@ function onGaze(g: GazePoint) {
     hotCorner(g);
     return;
   }
+  postureWatch(g);
   const show = settings.showCursor && g.valid && Number.isFinite(g.x);
   cursor.hidden = !show;
   if (show) {
@@ -207,7 +226,9 @@ function onGaze(g: GazePoint) {
   }
   if (!calRoot.hidden || !home.hidden) return;
   measure();
-  const target = g.valid ? targetTracker.update(g.t, rects, g.x, g.y) : null;
+  // Low confidence (face lost, or head far from the calibration pose): don't let dwell
+  // build up on whatever the drifting cursor happens to cross.
+  const target = g.valid && g.confidence >= 0.3 ? targetTracker.update(g.t, rects, g.x, g.y) : null;
   let out;
   if (settings.selectionMode === "blink" && g.source === "camera") out = blink.update(g.t, target, g.blinkL, g.blinkR);
   else if (settings.selectionMode === "click") out = { selected: null, progress: 0, target };
@@ -330,7 +351,28 @@ async function calibrate() {
     showToast("Calibration needs the camera. You're in mouse mode.");
     return;
   }
-  const stats = await runCalibration(gaze, calRoot, geometry);
+  const tape = settings.saveCalibrations ? new SessionTape(gaze) : null;
+  const stats = await runCalibration(gaze, calRoot, geometry, settings.calPoints, tape ?? undefined);
+  tape?.stop();
+  if (stats && tape) {
+    // Save the calibration as a replayable session (frames + targets), for offline evaluation.
+    const g = geometry();
+    const session = tape.toSession(
+      {
+        participant: settings.participant || "anon",
+        glasses: false,
+        lighting: "",
+        notes: `app calibration, ${settings.calPoints} pts, model ${settings.model}, hit6 ${Math.round(stats.hit6 * 100)}%`,
+        mode: "calibration",
+        distanceCm: settings.distanceCm,
+        screenDiagonalIn: g.screenDiagonalIn,
+        hfovDeg: settings.hfovDeg,
+      },
+      tracker,
+    );
+    const stamp = session.createdAt.replace(/[:.]/g, "-");
+    download(new Blob([JSON.stringify(session)], { type: "application/json" }), `gazecal-${(settings.participant || "anon").replace(/[^\w-]+/g, "_")}-${stamp}.json`);
+  }
   if (!stats) {
     showToast("Calibration cancelled or failed.");
     return;
@@ -338,14 +380,31 @@ async function calibrate() {
   lastError = stats;
   const g = geometry();
   showToast(
-    `<b>Calibrated.</b> Mean error <b>${stats.meanDeg.toFixed(2)}°</b> (${stats.meanPx.toFixed(0)} px), precision ±${stats.precisionDeg.toFixed(
-      2,
-    )}°, n=${stats.n}.<br><small>Assumes ${settings.screenDiagonalIn}" screen at ${g.distanceCm.toFixed(0)} cm${
+    `<b>Calibrated (${stats.points} points).</b> Hit rate on check points: <b>${Math.round(stats.hit6 * 100)}%</b> for 6 large buttons, ${Math.round(
+      stats.hit16 * 100,
+    )}% for a 4×4 grid.<br>Mean error ${stats.meanDeg.toFixed(2)}° (${stats.meanPx.toFixed(0)} px), precision ±${stats.precisionDeg.toFixed(2)}°, n=${stats.n}.<br><small>Assumes ${settings.screenDiagonalIn}" screen at ${g.distanceCm.toFixed(0)} cm${
       settings.distanceCm ? "" : " (estimated from iris size)"
     }. Smallest target here: ${smallestTargetPx()} px.</small>`,
     9000,
   );
   localStorage.setItem("gazetype.lastError.v1", JSON.stringify(stats));
+}
+
+// ---------- posture ----------
+let lowSince: number | null = null;
+let lastPostureToast = 0;
+/** If confidence stays low for 2 s, suggest recalibrating (at most every 20 s). */
+function postureWatch(g: GazePoint) {
+  if (g.source !== "camera" || !gaze.calibrated || !calRoot.hidden) return;
+  if (g.confidence >= 0.5) {
+    lowSince = null;
+    return;
+  }
+  lowSince ??= g.t;
+  if (g.t - lowSince > 2000 && g.t - lastPostureToast > 20_000) {
+    lastPostureToast = g.t;
+    showToast("You've moved a long way from where you calibrated, so tracking may be off. Move back, or press <b>◎ Calibrate</b>.", 6000);
+  }
 }
 
 // ---------- start ----------
@@ -395,7 +454,7 @@ function openRecord() {
     const g = geometry();
     const meta: SessionMeta = {
       participant: String(fd.get("participant") ?? "").trim(),
-      mode: fd.get("mode") === "short" ? "short" : "full",
+      mode: fd.get("mode") === "short" ? "short" : fd.get("mode") === "quick" ? "quick" : "full",
       glasses: fd.get("glasses") === "on",
       lighting: String(fd.get("lighting") ?? ""),
       notes: String(fd.get("notes") ?? ""),
@@ -518,6 +577,7 @@ $<HTMLFormElement>("#settings form").addEventListener("submit", () => {
       typeof d === "boolean" ? (input as HTMLInputElement).checked : typeof d === "number" ? Number(input.value) : input.value;
   }
   baseKb.withPrediction = settings.baselinePrediction;
+  gaze.setModel(settings.model);
   saveSettings();
   if (settings.voice && !prevVoice) void enableVoice();
   if (!settings.voice && prevVoice) stopVoice?.();

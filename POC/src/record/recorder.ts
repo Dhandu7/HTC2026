@@ -17,7 +17,7 @@ import {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function download(blob: Blob, name: string) {
+export function download(blob: Blob, name: string) {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = name;

@@ -44,6 +44,50 @@ export class DwellSelector {
 }
 
 /**
+ * Dwell with evidence accumulation: each target collects dwell time while gazed at and
+ * loses it at `decay` × real time while not. A cursor that flickers off a button for a
+ * few frames keeps most of its progress, and a brief pass over a neighbour on the way in
+ * drains away instead of firing. Same interface as DwellSelector.
+ */
+export class AccumulatingDwellSelector {
+  private evidence = new Map<string, number>();
+  private lastT: number | null = null;
+  private firedAt = -Infinity;
+  constructor(
+    public dwellMs = 800,
+    public decay = 1,
+    public refractoryMs = 400,
+  ) {}
+
+  update(t: number, target: string | null): SelectorOutput {
+    const dt = this.lastT === null ? 0 : Math.min(t - this.lastT, 200);
+    this.lastT = t;
+    for (const [k, v] of this.evidence) {
+      if (k === target) continue;
+      const nv = v - dt * this.decay;
+      if (nv <= 0) this.evidence.delete(k);
+      else this.evidence.set(k, nv);
+    }
+    if (!target) return { selected: null, progress: 0, target: null };
+    if (t - this.firedAt < this.refractoryMs) return { selected: null, progress: 0, target };
+    const e = (this.evidence.get(target) ?? 0) + dt;
+    if (e >= this.dwellMs) {
+      this.evidence.clear();
+      this.firedAt = t;
+      return { selected: target, progress: 1, target };
+    }
+    this.evidence.set(target, e);
+    return { selected: null, progress: e / this.dwellMs, target };
+  }
+
+  reset() {
+    this.evidence.clear();
+    this.lastT = null;
+    this.firedAt = -Infinity;
+  }
+}
+
+/**
  * Dwell-free selection by deliberate blink. Look at a target (short "aim" fixation),
  * then close both eyes for longer than an involuntary blink (default 350–1500 ms).
  * Involuntary blinks (< minClosedMs) are counted and ignored — that rejection count

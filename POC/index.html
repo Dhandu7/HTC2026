@@ -58,6 +58,21 @@
         <label><input name="baselinePrediction" type="checkbox" /> Word prediction on baseline keyboard</label>
         <label>Screen diagonal (in) <input name="screenDiagonalIn" type="number" min="7" max="40" step="0.1" /></label>
         <label>Viewing distance (cm, 0 = estimate) <input name="distanceCm" type="number" min="0" max="150" step="1" /></label>
+        <label>Calibration points
+          <select name="calPoints">
+            <option value="25">25 (most accurate, ~60 s)</option>
+            <option value="13">13 (~35 s)</option>
+            <option value="9">9 (fastest, ~25 s, least reliable)</option>
+          </select>
+        </label>
+        <label>Participant ID (for saved calibrations) <input name="participant" placeholder="e.g. derek" /></label>
+        <label><input name="saveCalibrations" type="checkbox" /> Save each calibration as a replayable file (Downloads)</label>
+        <label>Gaze model
+          <select name="model">
+            <option value="kernel">Kernel ridge (default, more accurate with 25 points)</option>
+            <option value="ridge">Quadratic ridge (original)</option>
+          </select>
+        </label>
         <label>Camera horizontal FOV (°) <input name="hfovDeg" type="number" min="30" max="120" step="1" /></label>
         <label><input name="showCursor" type="checkbox" /> Show gaze cursor (sized to measured error)</label>
         <label><input name="hotCorner" type="checkbox" /> Overlay: open by looking at top-right corner</label>
@@ -73,13 +88,14 @@
         <label>Participant ID <input name="participant" required placeholder="e.g. derek" /></label>
         <label>Protocol
           <select name="mode">
+            <option value="quick">Quick trial: 25-pt grid + 8 validation, ~80 s</option>
             <option value="full">Full (team): 25-pt grid + 16 validation + drift checks at 2/5/10 min, ~12 min</option>
             <option value="short">Short (stranger): 9-pt + 16 validation, ~1 min</option>
           </select>
         </label>
         <label><input name="glasses" type="checkbox" /> Wearing glasses</label>
         <label>Lighting <input name="lighting" placeholder="e.g. office overhead, window behind" /></label>
-        <label>Measured eye-to-screen distance (cm, 0 = not measured) <input name="distanceCm" type="number" min="0" max="150" step="1" value="0" /></label>
+        <label>Eye-to-screen distance (cm, leave 0 = estimate) <input name="distanceCm" type="number" min="0" max="150" step="1" value="0" /></label>
         <label><input name="video" type="checkbox" checked /> Also save local video (participant consents)</label>
         <label>Notes <input name="notes" /></label>
         <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Start</button></menu>

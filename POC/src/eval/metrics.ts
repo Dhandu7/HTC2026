@@ -22,6 +22,7 @@ export interface Layout {
 }
 
 export const LAYOUTS: Layout[] = [
+  { name: "4-chip (2x2)", cols: 2, rows: 2 },
   { name: "6-chip (3x2)", cols: 3, rows: 2 },
   { name: "16-grid (4x4)", cols: 4, rows: 4 },
 ];
