@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="brand/visualeyes-banner.svg" alt="VisualEyes: type with your eyes or head, speak in your own voice" width="100%">
+  <img src="brand/visualeyes-banner.svg" alt="VisualEyes logo" width="100%">
 </p>
 
 # VisualEyes
