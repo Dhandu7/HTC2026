@@ -17,6 +17,31 @@ describe("DwellSelector", () => {
     expect(d.update(800, "b").selected).toBeNull();
     expect(d.update(900, "b").selected).toBe("b");
   });
+  it("a brief slip off the key pauses the fill instead of restarting it", () => {
+    const d = new DwellSelector(500, 300, 200);
+    d.update(0, "a");
+    d.update(300, "a");
+    const slip = d.update(350, null); // gaze flickers off for 100 ms
+    expect(slip.target).toBe("a");
+    expect(slip.progress).toBeCloseTo(0.7); // frozen at 350 ms, when it slipped
+    d.update(400, "b"); // ...or onto a neighbour
+    expect(d.update(450, "a").progress).toBeCloseTo(0.7); // back after 100 ms away: still 70%
+    expect(d.update(600, "a").selected).toBe("a"); // fired after 500 ms of actually looking
+  });
+  it("never fires a key while the gaze is elsewhere", () => {
+    const d = new DwellSelector(500, 300, 200);
+    d.update(0, "a");
+    d.update(450, "a"); // 90%
+    for (let t = 466; t < 660; t += 33) expect(d.update(t, "b").selected).toBeNull();
+  });
+  it("a real move switches key, counting from when the gaze arrived", () => {
+    const d = new DwellSelector(500, 300, 200);
+    d.update(0, "a");
+    d.update(100, "b");
+    expect(d.update(300, "b").target).toBe("b"); // away 200 ms: switched
+    expect(d.update(599, "b").selected).toBeNull();
+    expect(d.update(600, "b").selected).toBe("b"); // 500 ms after first reaching "b"
+  });
 });
 
 describe("BlinkSelector", () => {

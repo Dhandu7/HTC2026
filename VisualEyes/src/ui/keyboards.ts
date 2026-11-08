@@ -12,6 +12,9 @@ export interface KeyboardHost {
   /** Action keys that leave the keyboard (speak, insert, hide, recalibrate, settings). */
   action(name: string): void;
   overlay: boolean;
+  /** Profiles the user can switch between by gaze. */
+  profiles(): { id: string; name: string }[];
+  activeProfileId(): string;
 }
 
 export interface Keyboard {
@@ -28,7 +31,15 @@ const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const btn = (id: string, label: string, cls = "", sub = "") =>
   `<button class="key ${cls}" data-target="${esc(id)}"><span class="lbl">${label}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</button>`;
 
-type Panel = "main" | "phrases" | "menu" | { letters: string };
+type Panel = "main" | "phrases" | "menu" | "profiles" | { letters: string };
+
+/** Longer chip text gets a smaller font so it fits the target instead of being cut off. */
+const chipSize = (label: string) => (label.length > 34 ? " xlong" : label.length > 16 ? " long" : "");
+
+/** Wait this long after the last selection before asking the LLM, so quick selections send one request. */
+const LLM_DEBOUNCE_MS = 150;
+/** A chip that is deleted within this time counts as a rejected suggestion. */
+const REJECT_MS = 2000;
 
 export class GazeTypeKeyboard implements Keyboard {
   readonly name = "gazetype";
@@ -40,6 +51,9 @@ export class GazeTypeKeyboard implements Keyboard {
   private llmChips: Suggestion[] = [];
   private panelItems: Suggestion[] = [];
   private llmSeq = 0;
+  private llmTimer: ReturnType<typeof setTimeout> | undefined;
+  private llmAbort: AbortController | null = null;
+  private lastPick: { word: string; before: string[]; at: number } | null = null;
 
   constructor(
     private engine: PredictionEngine,
@@ -61,15 +75,31 @@ export class GazeTypeKeyboard implements Keyboard {
     return tokenize(this.text());
   }
 
+  /** Last local suggestion time in ms (shown in the status bar). */
+  lastSuggestMs = 0;
+
+  /** Cancel any LLM request in flight or waiting to be sent: its answer would be for old text. */
+  private cancelLlm() {
+    clearTimeout(this.llmTimer);
+    this.llmAbort?.abort();
+    this.llmAbort = null;
+  }
+
   /** Recompute local suggestions now, and kick off an LLM request in the background. */
   update() {
     const words = this.committedTokens();
+    const t0 = performance.now();
     this.chips = this.engine.suggest(words, this.slots, 4, 1);
+    this.lastSuggestMs = performance.now() - t0;
     this.llmChips = [];
     const seq = ++this.llmSeq;
+    this.cancelLlm();
     // Ask the LLM for sentence continuations once there is some context and no word in progress.
     if (!this.slots.length && words.length >= 1) {
-      void llmPredict({ task: "continue", text: this.text(), history: this.engine.topPhrases(8), n: 2 }).then((s) => {
+      const text = this.text();
+      this.llmTimer = setTimeout(() => {
+        const ctrl = (this.llmAbort = new AbortController());
+        void llmPredict({ task: "continue", text, history: this.engine.topPhrases(8), n: 2 }, ctrl.signal).then((s) => {
         if (seq !== this.llmSeq) return;
         this.llmChips = s
           .map((full) => full.trim())
@@ -77,14 +107,18 @@ export class GazeTypeKeyboard implements Keyboard {
           .map((full) => ({ kind: "llm" as const, label: full.slice(this.text().length).trim(), text: full, score: 0 }))
           .filter((c) => c.label);
         this.host.refresh();
-      });
+        });
+      }, LLM_DEBOUNCE_MS);
     }
   }
 
-  /** Chips shown: local first, then at most one LLM sentence in the last slot. */
+  /** Chips shown: local first, then at most one LLM sentence in the last slot (unless a phrase chip already says it). */
   private visibleChips(): (Suggestion | null)[] {
     const out: (Suggestion | null)[] = this.chips.slice(0, 4);
-    if (this.llmChips.length) out.splice(3, 1, this.llmChips[0]);
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z' ]/g, "").trim();
+    const shown = new Set(this.chips.map((c) => norm(c.label)));
+    const ai = this.llmChips.find((c) => !shown.has(norm(c.label)));
+    if (ai) out.splice(3, 1, ai);
     while (out.length < 4) out.push(null);
     return out;
   }
@@ -92,7 +126,7 @@ export class GazeTypeKeyboard implements Keyboard {
   private preview(): string {
     if (!this.slots.length) return "";
     const top = this.chips.find((c) => c.kind === "word");
-    return top ? top.text : this.slots.map((s) => (s.length === 1 ? s : "·")).join("");
+    return top ? top.label : this.slots.map((s) => (s.length === 1 ? s : "·")).join("");
   }
 
   render(root: HTMLElement) {
@@ -102,7 +136,7 @@ export class GazeTypeKeyboard implements Keyboard {
       const chips = this.visibleChips()
         .map((c, i) =>
           c
-            ? btn(`chip:${i}`, esc(c.kind === "word" ? c.label : `${c.label}`), `chip ${c.kind}`, c.kind === "llm" ? "✨ AI" : c.kind === "phrase" ? "phrase" : "")
+            ? btn(`chip:${i}`, esc(c.label), `chip ${c.kind}${chipSize(c.label)}`, c.kind === "llm" ? "✨ AI" : c.kind === "phrase" ? "phrase" : "")
             : `<div class="key chip empty"></div>`,
         )
         .join("");
@@ -125,6 +159,7 @@ export class GazeTypeKeyboard implements Keyboard {
         btn("menu", "☰ Done", "ctrl");
       root.className = "board gazetype panel2x4";
     } else if (p === "menu") {
+      const me = this.host.profiles().find((p) => p.id === this.host.activeProfileId());
       root.innerHTML =
         btn("act:speak", "🔊 Speak", "action") +
         (this.host.overlay ? btn("act:insert", "📋 Insert", "action", "into app") : btn("act:copy", "📋 Copy", "action")) +
@@ -132,8 +167,19 @@ export class GazeTypeKeyboard implements Keyboard {
         btn("act:spell", this.spellMode ? "Spell: ON" : "Spell: OFF", "action", "exact letters") +
         btn("act:recal", "◎ Recalibrate", "action") +
         (this.host.overlay ? btn("act:hide", "✖ Hide", "action") : btn("act:settings", "⚙ Settings", "action")) +
-        btn("back", "↩ Back", "ctrl") +
-        btn("act:benchmark-done", "⏱ Finish run", "action");
+        btn("act:profiles", "👤 Switch user", "action", esc(me?.name ?? "")) +
+        btn("act:benchmark-done", "⏱ Finish run", "action") +
+        btn("act:recenter", "⊕ Re-center", "action", "or blink 3×") +
+        `<div class="key empty"></div>`.repeat(2) +
+        btn("back", "↩ Back", "ctrl");
+      root.className = "board gazetype panel3x4";
+    } else if (p === "profiles") {
+      const list = this.host.profiles().slice(0, 7);
+      const active = this.host.activeProfileId();
+      root.innerHTML =
+        list.map((pr) => btn(`prof:${pr.id}`, esc(pr.name), `action${pr.id === active ? " current" : ""}`, pr.id === active ? "current" : "")).join("") +
+        `<div class="key empty"></div>`.repeat(7 - list.length) +
+        btn("back", "↩ Back", "ctrl");
       root.className = "board gazetype panel2x4";
     } else {
       const letters = p.letters.split("");
@@ -152,12 +198,15 @@ export class GazeTypeKeyboard implements Keyboard {
   }
 
   private commitWord(w: string) {
-    this.committed.push(this.committed.length === 0 ? cap(w) : w === "i" ? "I" : w);
+    const shown = this.engine.display(w);
+    this.committed.push(this.committed.length === 0 ? cap(shown) : w === "i" ? "I" : shown);
     this.slots = [];
   }
 
   private commitSentence(full: string) {
-    this.committed = full.trim().split(/\s+/);
+    const words = full.trim().split(/\s+/).map((w) => (w === "i" ? "I" : w));
+    if (words.length) words[0] = cap(words[0]);
+    this.committed = words;
     this.slots = [];
   }
 
@@ -167,7 +216,9 @@ export class GazeTypeKeyboard implements Keyboard {
       const slots = [...this.slots];
       this.panelItems = this.engine.expandInitials(slots, 6);
       const seq = ++this.llmSeq;
-      void llmPredict({ task: "expand", text: this.text(), slots, history: this.engine.topPhrases(8), n: 4 }).then((s) => {
+      this.cancelLlm();
+      const ctrl = (this.llmAbort = new AbortController());
+      void llmPredict({ task: "expand", text: this.text(), slots, history: this.engine.topPhrases(8), n: 4 }, ctrl.signal).then((s) => {
         if (seq !== this.llmSeq || this.panel !== "phrases") return;
         const have = new Set(this.panelItems.map((p) => p.text.toLowerCase()));
         for (const full of s) if (!have.has(full.toLowerCase())) this.panelItems.push({ kind: "llm", label: full, text: full, score: 0 });
@@ -201,6 +252,7 @@ export class GazeTypeKeyboard implements Keyboard {
         const c = this.visibleChips()[Number(arg)];
         if (!c) return "other";
         if (c.kind === "word") {
+          this.lastPick = { word: c.text, before: this.committedTokens(), at: Date.now() };
           this.commitWord(c.text);
           ev = "word";
         } else if (c.kind === "phrase") {
@@ -222,11 +274,22 @@ export class GazeTypeKeyboard implements Keyboard {
         ev = "space";
         break;
       }
-      case "del":
+      case "del": {
         if (this.slots.length) this.slots.pop();
-        else this.committed.pop();
+        else {
+          const removed = this.committed.pop();
+          // Picked a suggested word and deleted it straight away: that suggestion was wrong here.
+          const pick = this.lastPick;
+          if (pick && removed?.toLowerCase() === pick.word && Date.now() - pick.at < REJECT_MS) this.engine.reject(pick.before, pick.word);
+        }
+        this.lastPick = null;
         ev = "delete";
         break;
+      }
+      case "prof":
+        this.panel = "main";
+        this.host.action(`profile:${arg}`);
+        return "other";
       case "phrases":
         this.openPhrases();
         this.host.refresh();
@@ -249,6 +312,10 @@ export class GazeTypeKeyboard implements Keyboard {
       case "act":
         if (arg === "spell") {
           this.spellMode = !this.spellMode;
+          return "other";
+        }
+        if (arg === "profiles") {
+          this.panel = "profiles";
           return "other";
         }
         if (arg === "clear") {

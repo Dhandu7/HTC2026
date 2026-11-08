@@ -4,6 +4,7 @@ import type { GazeEngine } from "../gaze/engine";
 import type { Sample } from "../gaze/regression";
 import { summarizeErrors, type ErrorStats, type ViewingGeometry } from "../gaze/accuracy";
 import type { FaceFrame } from "../gaze/tracker";
+import type { HeadPos } from "../gaze/fixation";
 
 // 5 columns x 4 rows of dots (20: enough for the model, short enough that your seat doesn't drift mid-calibration) across the screen, visited row by row in a serpentine so the head/eyes make short moves.
 const COLS = 5;
@@ -121,7 +122,12 @@ export async function runCalibration(
       await sleep(2500);
       return null;
     }
-    engine.setCalibration(samples);
+    // Where the head was while calibrating, so the app can warn if it moves away later (eye mode only).
+    const headRefOf = () => {
+      const kept = pts.flatMap((c) => trimOutliers(c.frames));
+      return [0, 1, 2].map((j) => kept.reduce((a, f) => a + f.headPos[j], 0) / kept.length) as HeadPos;
+    };
+    engine.setCalibration(samples, headRefOf());
 
     // Quality pass: re-collect the dots the fit disagrees with most (head jerked, glanced away, tracker glitch).
     const resid = pts.map((c, i) => ({
@@ -143,7 +149,7 @@ export async function runCalibration(
     }
     if (bad.length) {
       samples = build();
-      engine.setCalibration(samples);
+      engine.setCalibration(samples, headRefOf());
     }
 
     msg.textContent = "Checking accuracy…";
@@ -164,6 +170,42 @@ export async function runCalibration(
   } finally {
     off();
     window.removeEventListener("keydown", onKey);
+    root.hidden = true;
+    root.innerHTML = "";
+  }
+}
+
+export interface RecenterResult {
+  ok: boolean;
+  /** How far the pointer was shifted (px). */
+  shiftPx?: number;
+  reason?: "no-face" | "unsteady";
+}
+
+/**
+ * Quick re-center (~1.5 s): one dot in the middle of the screen. Fixes drift without a full
+ * calibration, and works however far off the pointer is, because the user just looks at the dot.
+ */
+export async function runRecenter(engine: GazeEngine, root: HTMLElement): Promise<RecenterResult> {
+  const x = innerWidth / 2;
+  const y = innerHeight / 2;
+  root.innerHTML = `<div class="cal-msg recenter-msg">Look at the dot</div><div class="cal-dot collect" style="left:${x}px;top:${y}px"></div>`;
+  root.hidden = false;
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await sleep(SETTLE_MS);
+      const t0 = performance.now();
+      await sleep(COLLECT_MS);
+      const fix = engine.fixation(t0, performance.now());
+      if (!fix) return { ok: false, reason: "no-face" };
+      // A steady look keeps estimates within a few degrees; a big spread means the eyes were moving.
+      if (fix.spreadPx < Math.min(innerWidth, innerHeight) * 0.12) {
+        return { ok: true, shiftPx: engine.recenter(fix.features, x, y) };
+      }
+      root.querySelector(".cal-msg")!.textContent = "Keep looking at the dot";
+    }
+    return { ok: false, reason: "unsteady" };
+  } finally {
     root.hidden = true;
     root.innerHTML = "";
   }

@@ -2,15 +2,27 @@ import "./style.css";
 import { FaceTracker } from "./gaze/tracker";
 import { GazeEngine, type GazePoint } from "./gaze/engine";
 import { estimateDistanceCm, type ErrorStats, type ViewingGeometry } from "./gaze/accuracy";
-import { runCalibration } from "./ui/calibration";
+import { runCalibration, runRecenter } from "./ui/calibration";
+import { BlinkBurstDetector } from "./input/gestures";
 import { SessionRecorder } from "./metrics/recorder";
 import { BlinkSelector, DwellSelector, TargetTracker, type Rect, type SelectionMode } from "./input/selection";
 import { PredictionEngine } from "./predict/engine";
 import { CORE_WORDS, SEED_PHRASES, BENCHMARK_SENTENCES } from "./predict/vocab";
-import { llmAvailable } from "./predict/llm";
+import { llmAvailable, llmStatus, llmWarm, setLlmProfile } from "./predict/llm";
+import { splitSentences } from "./predict/engine";
+import { ProfileManager, pickSamples, type Profile } from "./profile/profiles";
 import { BaselineKeyboard, GazeTypeKeyboard, type KeyboardHost } from "./ui/keyboards";
 import { TypingSession, normalizeText, type RunResult } from "./metrics/session";
+import { VoiceRouter } from "./voice/router";
+import { SystemVoice } from "./voice/system";
+import { HostedVoiceApi } from "./voice/hostedApi";
+import { HostedVoiceController, friendlyReason } from "./voice/hostedController";
+import { HostedVoice, BrowserAudioSink } from "./voice/hostedVoice";
+import { apiConfigFrom, loadVoiceApiSettings, saveVoiceApiSettings, usingDevLogin, type VoiceApiSettings } from "./voice/hostedConfig";
+import { mountMyVoice } from "./ui/myVoice";
 import { startVoiceCommands } from "./input/voice";
+import { recordSession } from "./record/recorder";
+import type { SessionMeta } from "./record/format";
 
 // ---------- Electron bridge (absent in the browser) ----------
 interface Bridge {
@@ -35,6 +47,8 @@ interface Settings {
   showCursor: boolean;
   hotCorner: boolean;
   voice: boolean;
+  /** Three quick blinks re-center a drifting pointer. */
+  blinkRecenter: boolean;
 }
 const DEFAULTS: Settings = {
   selectionMode: "dwell",
@@ -46,6 +60,7 @@ const DEFAULTS: Settings = {
   hfovDeg: 60,
   showCursor: true,
   hotCorner: true,
+  blinkRecenter: true,
   voice: false,
 };
 const load = <T>(k: string, d: T): T => {
@@ -97,14 +112,20 @@ tracker.onFrame = (f) => {
   // Eye mode keeps its original 7 features; nose mode gets 10 head features (see NOSE_FLOOR in engine.ts).
   gaze.handleFrame({ ...f, vector: nosePointer ? [v[4], v[5], v[7], v[8], v[11], v[12], v[10], v[9], v[13], v[14]] : v.slice(0, 7) });
 };
-const predictor = new PredictionEngine({
-  get: (k) => localStorage.getItem(k),
-  set: (k, v) => localStorage.setItem(k, v),
-});
+const profiles = new ProfileManager(localStorage);
+const predictor = new PredictionEngine(profiles.store(profiles.active.id));
+const CAL_KEY = "gazetype.calibration.v1";
+gaze.storageKey = profiles.keyFor(profiles.active.id, CAL_KEY);
 let lastError: ErrorStats | null = null;
 let llmOn = false;
 
-const host: KeyboardHost = { refresh: () => render(), action: (a) => void doAction(a), overlay: isOverlay };
+const host: KeyboardHost = {
+  refresh: () => render(),
+  action: (a) => void doAction(a),
+  overlay: isOverlay,
+  profiles: () => profiles.list(),
+  activeProfileId: () => profiles.active.id,
+};
 const gazeKb = new GazeTypeKeyboard(predictor, host);
 const baseKb = new BaselineKeyboard(predictor, host, settings.baselinePrediction);
 let kb: GazeTypeKeyboard | BaselineKeyboard = gazeKb;
@@ -157,14 +178,59 @@ function updateStatus() {
     gaze.implicitCount ? `+${gaze.implicitCount} auto-cal` : "",
     `${settings.selectionMode}${settings.selectionMode === "dwell" ? ` ${kb === gazeKb ? settings.dwellMs : settings.baselineDwellMs} ms` : ""}`,
     settings.selectionMode === "blink" ? `blinks ✓${blink.accepted} ✗${blink.rejectedShort + blink.rejectedLong}` : "",
+    `👤 ${esc(profiles.active.name)}`,
+    kb === gazeKb ? `predict ${gazeKb.lastSuggestMs.toFixed(1)} ms` : "",
     llmOn ? "✨ LLM on" : "on-device only",
+    voiceStatusText(),
   ];
   statusEl.innerHTML = parts.filter(Boolean).join(" · ");
 }
 setInterval(updateStatus, 500);
 
+// ---------- head position ----------
+// Webcam gaze is calibrated for one head position. If the head has been somewhere else for
+// over a second, say how to get back; hide again once it's been back for half a second.
+const headHint = $("#head-hint");
+let headBadSince: number | null = null;
+let headOkSince: number | null = null;
+setInterval(() => {
+  const active = expanded && home.hidden && calRoot.hidden;
+  const hc = active ? gaze.headCheck() : null;
+  const now = performance.now();
+  if (!hc || hc.ok) {
+    headBadSince = null;
+    headOkSince ??= now;
+    if (!hc || now - headOkSince > 500) headHint.hidden = true;
+    return;
+  }
+  headOkSince = null;
+  headBadSince ??= now;
+  if (now - headBadSince > 1000) {
+    headHint.textContent = `${hc.advice}: back to where you were when calibrating`;
+    headHint.hidden = false;
+  }
+}, 250);
+
 // ---------- selection ----------
 let pendingImplicit: { timer: number } | null = null;
+
+/**
+ * Auto-calibration samples from the sentence being typed. They only teach the gaze model once
+ * the user accepts the sentence (speaks, inserts or copies it): selections made while the
+ * pointer was drifting, then fixed or abandoned, would otherwise make the drift worse.
+ */
+let sentenceSamples: { features: number[]; x: number; y: number }[] = [];
+
+function acceptSentenceSamples() {
+  // A selection far from where the model thought the eyes were is more likely a mistake than a correction.
+  const limit = Math.max(150, 2.5 * (lastError?.meanPx ?? 60));
+  const off = gaze.driftOffset;
+  for (const s of sentenceSamples) {
+    const p = gaze.predictRaw(s.features);
+    if (Math.hypot(p.x + off.x - s.x, p.y + off.y - s.y) <= limit) gaze.addImplicitSample(s.features, s.x, s.y);
+  }
+  sentenceSamples = [];
+}
 
 function applySelection(id: string, t: number) {
   const el = board.querySelector<HTMLElement>(`[data-target="${CSS.escape(id)}"]`);
@@ -174,6 +240,8 @@ function applySelection(id: string, t: number) {
     clearTimeout(pendingImplicit.timer);
     pendingImplicit = null;
   }
+  // Cleared the whole sentence: nothing typed in it was right, so learn nothing from it.
+  if (kind === "delete" && !kb.text().trim()) sentenceSamples = [];
   session.record(t, kind);
   // Implicit recalibration: if this selection isn't undone within 2 s, treat the
   // fixation before it as a labelled sample at the target's centre.
@@ -185,7 +253,7 @@ function applySelection(id: string, t: number) {
       if (pendingImplicit) clearTimeout(pendingImplicit.timer);
       pendingImplicit = {
         timer: window.setTimeout(() => {
-          gaze.addImplicitSample(feats, r.left + r.width / 2, r.top + r.height / 2);
+          sentenceSamples.push({ features: feats, x: r.left + r.width / 2, y: r.top + r.height / 2 });
           pendingImplicit = null;
         }, 2000),
       };
@@ -227,9 +295,12 @@ function onGaze(g: GazePoint) {
     cursor.style.transform = `translate(${g.x - r}px, ${g.y - r}px)`;
     cursor.style.width = cursor.style.height = `${2 * r}px`;
   }
+  cursor.classList.toggle("lost", !!g.offscreen);
   if (!calRoot.hidden || !home.hidden) return;
+  updateLostHint(g);
   measure();
-  const target = g.valid ? targetTracker.update(g.t, rects, g.x, g.y) : null;
+  // An off-screen estimate is pinned to the edge; selecting from there would hit an edge key by accident.
+  const target = g.valid && !g.offscreen ? targetTracker.update(g.t, rects, g.x, g.y) : null;
   let out;
   if (settings.selectionMode === "blink" && g.source === "camera") out = blink.update(g.t, target, g.blinkL, g.blinkR);
   else if (settings.selectionMode === "click") out = { selected: null, progress: 0, target };
@@ -255,6 +326,76 @@ function onGaze(g: GazePoint) {
   if (out.selected) applySelection(out.selected, g.t);
 }
 gaze.onGaze(onGaze);
+
+// ---------- re-centering a drifting pointer ----------
+const gazeHint = $("#gaze-hint");
+const blinkBurst = new BlinkBurstDetector();
+let lostSince: number | null = null;
+let recentering = false;
+
+/** After the pointer has been off the screen for 2 s, say how to get it back. */
+function updateLostHint(g: GazePoint) {
+  if (g.source !== "camera" || !g.offscreen) {
+    lostSince = null;
+    gazeHint.hidden = true;
+    return;
+  }
+  lostSince ??= g.t;
+  if (g.t - lostSince < 2000 || !gazeHint.hidden) return;
+  gazeHint.textContent = settings.blinkRecenter
+    ? "Pointer lost. Blink 3 times quickly to re-center."
+    : "Pointer lost. Press R to re-center, or turn on blink re-centering in Settings.";
+  gazeHint.hidden = false;
+}
+
+// Three quick blinks re-center the pointer, wherever it has drifted to.
+gaze.onRaw((f) => {
+  if (!f || !settings.blinkRecenter || gaze.source !== "camera" || !gaze.calibrated) return;
+  if (!expanded || recentering || !calRoot.hidden || !home.hidden) return;
+  if (blinkBurst.update(f.t, f.blinkL, f.blinkR)) void recenter();
+});
+
+// A caregiver can also press R.
+window.addEventListener("keydown", (e) => {
+  const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement;
+  if ((e.key === "r" || e.key === "R") && !typing && !e.ctrlKey && !e.metaKey && !e.altKey && !document.querySelector("dialog[open]")) void recenter();
+});
+
+async function recenter() {
+  if (gaze.source !== "camera" || !gaze.calibrated) {
+    showToast("Re-centering needs the camera and a calibration first.");
+    return;
+  }
+  if (recentering || !calRoot.hidden) return;
+  recentering = true;
+  // Selections made while drifting must not become calibration samples.
+  if (pendingImplicit) {
+    clearTimeout(pendingImplicit.timer);
+    pendingImplicit = null;
+  }
+  sentenceSamples = [];
+  gazeHint.hidden = true;
+  lostSince = null;
+  try {
+    const r = await runRecenter(gaze, calRoot);
+    const small = Math.min(innerWidth, innerHeight);
+    if (!r.ok)
+      showToast(
+        r.reason === "no-face"
+          ? "Couldn't see your eyes. Check the light and camera, then try again."
+          : "Couldn't get a steady look at the dot. Try again and keep your eyes on it.",
+        5000,
+      );
+    else if (r.shiftPx! > small * 0.25)
+      showToast(`Re-centered (moved ${Math.round(r.shiftPx!)} px). That was a big drift: a full ◎ Recalibrate will track better.`, 6000);
+    else showToast(`Re-centered (moved ${Math.round(r.shiftPx!)} px).`, 2500);
+  } finally {
+    recentering = false;
+    blinkBurst.reset();
+    dwell.reset();
+    targetTracker.reset();
+  }
+}
 
 // ---------- overlay: show/hide ----------
 function setExpanded(v: boolean, fromMain = false) {
@@ -297,17 +438,60 @@ function hotCorner(g: GazePoint) {
 }
 
 // ---------- actions ----------
+// Speaking goes through the voice router: the user's own hosted voice (ElevenLabs, via our service, one voice per
+// user from "My voice") when they have one and it is active, otherwise the system voice. A slow, failing, paused or
+// missing voice never leaves the user silent. The server's single-voice flow (server/elevenlabs.ts, a fixed
+// ELEVENLABS_VOICE_ID) is not used by the app. See docs/VOICE_ENGINE_FLOW.md for the tiers and docs/AWS_VOICE_HANDOFF.md for the service.
+let voiceApiSettings: VoiceApiSettings = loadVoiceApiSettings(localStorage);
+const voiceApi = new HostedVoiceApi(apiConfigFrom(() => voiceApiSettings));
+const voiceCtl = new HostedVoiceController(voiceApi, async (text) => (await voice.speak(text).done));
+const voice = new VoiceRouter({
+  providers: [new HostedVoice(voiceApi, new BrowserAudioSink(), () => voiceCtl.usable()), new SystemVoice()],
+  // The service is the source of truth for consent: the cloned tier is allowed only while the voice is active there.
+  policy: () => ({ allows: (tier) => tier === "system" || (tier === "cloned" && voiceCtl.usable()) }),
+  // Over the network the first sound takes longer than a local clip; past this the system voice speaks instead.
+  startBudgetMs: { cloned: 2500 },
+  onResult: () => updateStatus(),
+});
+const myVoice = mountMyVoice({
+  dialog: $<HTMLDialogElement>("#myvoice"),
+  controller: voiceCtl,
+  getApiSettings: () => voiceApiSettings,
+  saveApiSettings: (s) => {
+    voiceApiSettings = s;
+    saveVoiceApiSettings(localStorage, s);
+  },
+  usingDevLogin,
+});
+$("#voice-btn").addEventListener("click", () => myVoice.open());
+
+function voiceStatusText(): string {
+  const st = voiceCtl.status();
+  const last = voice.last;
+  if (st === "active" && !voiceCtl.usable()) return "🗣 my voice needs verifying";
+  if (st === "active") {
+    return last && last.tier === "system" && last.fellBack ? `🗣 system voice: ${friendlyReason(last.reason) || "my voice unavailable"}` : last?.tier === "cloned" ? `🗣 my voice · ${last.ttfaMs} ms` : "🗣 my voice ready";
+  }
+  return st === "paused" ? "🗣 my voice paused" : "";
+}
+
 function speak(text: string) {
   if (!text.trim()) return;
-  speechSynthesis.cancel();
-  speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  void voice.speak(text);
 }
 
 async function doAction(a: string) {
   const text = kb.text().trim();
+  if (a.startsWith("profile:")) {
+    switchProfile(a.slice("profile:".length));
+    showToast(`Now typing as <b>${esc(profiles.active.name)}</b>`);
+    render();
+    return;
+  }
   switch (a) {
     case "speak":
       speak(text);
+      if (text) acceptSentenceSamples();
       if (!benchmark && text) {
         predictor.learn(text);
         kb.clear();
@@ -315,6 +499,7 @@ async function doAction(a: string) {
       break;
     case "insert":
       if (text && bridge) {
+        acceptSentenceSamples();
         predictor.learn(text);
         const ok = await bridge.insertText(text);
         showToast(ok ? "Inserted into the focused app" : "Copied — press ⌘V / Ctrl+V to paste (grant Accessibility for auto-paste)");
@@ -324,6 +509,7 @@ async function doAction(a: string) {
     case "copy":
       if (text) {
         await navigator.clipboard.writeText(text).catch(() => {});
+        acceptSentenceSamples();
         predictor.learn(text);
         showToast("Copied to clipboard");
       }
@@ -333,6 +519,9 @@ async function doAction(a: string) {
       break;
     case "recal":
       await calibrate();
+      break;
+    case "recenter":
+      await recenter();
       break;
     case "settings":
       openSettings();
@@ -418,6 +607,40 @@ $("#kb-toggle").addEventListener("click", () => {
   render();
 });
 $("#recal").addEventListener("click", () => void calibrate());
+$("#record-btn").addEventListener("click", openRecord);
+
+// ---------- session recording (offline evaluation) ----------
+function openRecord() {
+  if (gaze.source !== "camera") {
+    showToast("Recording needs the camera. You're in mouse mode.");
+    return;
+  }
+  const dlg = $<HTMLDialogElement>("#record");
+  const form = dlg.querySelector("form")!;
+  dlg.onclose = async () => {
+    if (dlg.returnValue !== "ok") return;
+    const fd = new FormData(form);
+    const g = geometry();
+    const meta: SessionMeta = {
+      participant: String(fd.get("participant") ?? "").trim(),
+      mode: fd.get("mode") === "short" ? "short" : "full",
+      glasses: fd.get("glasses") === "on",
+      lighting: String(fd.get("lighting") ?? ""),
+      notes: String(fd.get("notes") ?? ""),
+      distanceCm: Number(fd.get("distanceCm")) || 0,
+      screenDiagonalIn: g.screenDiagonalIn,
+      hfovDeg: settings.hfovDeg,
+    };
+    const n = await recordSession(gaze, tracker, calRoot, { meta, video: fd.get("video") === "on" });
+    showToast(
+      n === null
+        ? "Recording cancelled before validation finished; nothing saved."
+        : `Saved session (${n} frames) to your Downloads. Move it to VisualEyes/recordings/ and run <code>npm run replay -- recordings/*.json</code>.`,
+      9000,
+    );
+  };
+  dlg.showModal();
+}
 $("#export-data").addEventListener("click", () => {
   const data = rec.toJSON({
     model: nosePointer ? "head" : "eye",
@@ -589,13 +812,187 @@ async function enableVoice() {
   }
 }
 
+// ---------- profiles ----------
+const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+
+/** Everything that depends on who is typing: prediction data, calibration, LLM context. */
+function applyProfile(p: Profile) {
+  gaze.storageKey = profiles.keyFor(p.id, CAL_KEY);
+  setLlmProfile({ id: p.id, name: p.name, about: p.about, people: p.people, samples: p.samples });
+  $("#profile-btn").textContent = `👤 ${p.name}`;
+  fillProfileSelect($<HTMLSelectElement>("#profile-select"), p.id);
+  void llmWarm();
+}
+
+function switchProfile(id: string) {
+  if (id === profiles.active.id) return;
+  const p = profiles.setActive(id);
+  predictor.useStore(profiles.store(p.id));
+  applyProfile(p);
+  // Each person's eyes need their own calibration.
+  if (gaze.source === "camera" && !gaze.loadSavedCalibration()) showToast(`No calibration saved for ${esc(p.name)} yet: choose ◎ Calibrate.`);
+  kb.clear();
+}
+
+function fillProfileSelect(sel: HTMLSelectElement, selected: string) {
+  sel.innerHTML = profiles
+    .list()
+    .map((p) => `<option value="${p.id}"${p.id === selected ? " selected" : ""}>${esc(p.name)}</option>`)
+    .join("");
+}
+
+const pfDlg = $<HTMLDialogElement>("#profile-dlg");
+const pf = {
+  select: $<HTMLSelectElement>("#pf-select"),
+  name: $<HTMLInputElement>("#pf-name"),
+  about: $<HTMLTextAreaElement>("#pf-about"),
+  people: $<HTMLInputElement>("#pf-people"),
+  samples: $<HTMLTextAreaElement>("#pf-samples"),
+  learned: $("#pf-learned"),
+};
+let editingId = profiles.active.id;
+
+function loadProfileForm(id: string) {
+  editingId = id;
+  const p = profiles.list().find((x) => x.id === id)!;
+  fillProfileSelect(pf.select, id);
+  pf.name.value = p.name;
+  pf.about.value = p.about;
+  pf.people.value = p.people.join(", ");
+  pf.samples.value = "";
+  pf.learned.textContent = p.samples.length ? `${p.samples.length} of their own sentences are used as examples for AI suggestions.` : "";
+}
+
+function openProfiles() {
+  loadProfileForm(profiles.active.id);
+  pfDlg.showModal();
+}
+
+/** Save the form into the profile being edited and start using it. */
+function saveProfileForm() {
+  const people = pf.people.value.split(",").map((s) => s.trim()).filter(Boolean);
+  profiles.update(editingId, { name: pf.name.value.trim() || "Me", about: pf.about.value.trim(), people });
+  switchProfile(editingId);
+  predictor.setPinned(people);
+  predictor.setTopics(pf.about.value);
+  applyProfile(profiles.active);
+  render();
+}
+
+pf.select.addEventListener("change", () => loadProfileForm(pf.select.value));
+$("#pf-save").addEventListener("click", () => {
+  saveProfileForm();
+  pfDlg.close();
+  showToast(`Typing as <b>${esc(profiles.active.name)}</b>`);
+});
+$("#pf-new").addEventListener("click", () => {
+  const p = profiles.create(`User ${profiles.list().length + 1}`);
+  loadProfileForm(p.id);
+  pf.name.select();
+});
+$("#pf-delete").addEventListener("click", () => {
+  const p = profiles.list().find((x) => x.id === editingId)!;
+  if (profiles.list().length <= 1) return void (pf.learned.textContent = "You can't delete the only profile.");
+  if (!confirm(`Delete ${p.name} and everything they've taught the keyboard? This can't be undone.`)) return;
+  const wasActive = p.id === profiles.active.id;
+  profiles.remove(p.id);
+  if (wasActive) {
+    predictor.useStore(profiles.store(profiles.active.id));
+    applyProfile(profiles.active);
+    kb.clear();
+  }
+  loadProfileForm(profiles.active.id);
+  render();
+});
+$<HTMLInputElement>("#pf-file").addEventListener("change", async (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (file) pf.samples.value = await file.text();
+});
+$("#pf-learn").addEventListener("click", () => {
+  const text = pf.samples.value;
+  if (!text.trim()) return void (pf.learned.textContent = "Paste some text or choose a .txt file first.");
+  saveProfileForm(); // learning goes into the profile being edited, so make it active
+  const n = predictor.ingest(text);
+  const p = profiles.active;
+  const samples = pickSamples([...p.samples, ...splitSentences(text)]);
+  profiles.update(p.id, { samples });
+  applyProfile(profiles.active);
+  pf.samples.value = "";
+  pf.learned.textContent = `Learned from ${n} sentences. ${samples.length} are used as examples for AI suggestions.`;
+});
+$("#pf-export").addEventListener("click", () => {
+  const p = profiles.list().find((x) => x.id === editingId)!;
+  const blob = new Blob([profiles.exportProfile(p.id)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `gazetype-profile-${p.name.replace(/\W+/g, "-").toLowerCase()}.json`;
+  a.click();
+});
+$<HTMLInputElement>("#pf-import").addEventListener("change", async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  try {
+    const p = profiles.importProfile(await file.text());
+    loadProfileForm(p.id);
+    pf.learned.textContent = `Imported ${p.name}. Choose Save & use to switch to them.`;
+  } catch (err) {
+    pf.learned.textContent = `Couldn't import: ${(err as Error).message}`;
+  }
+});
+$("#profile-btn").addEventListener("click", openProfiles);
+$("#profile-manage").addEventListener("click", openProfiles);
+$<HTMLSelectElement>("#profile-select").addEventListener("change", (e) => {
+  switchProfile((e.target as HTMLSelectElement).value);
+  render();
+});
+
+/**
+ * Check the local server for AI suggestions and voice, and show the result on the start screen.
+ * `npm run dev:all` starts the page and the server together, so the first check can beat the
+ * server: while it isn't reachable, check again every 2 s for up to a minute.
+ */
+/** The start-screen line about speech: the user's own onboarded voice (My voice), else the system voice. */
+function updateTtsLine() {
+  const el = $("#tts-status");
+  const st = voiceCtl.status();
+  const on = st === "active" && voiceCtl.usable();
+  el.className = `llm-status ${on ? "on" : "off"}`;
+  el.textContent = on
+    ? "🗣 Speaking in your voice"
+    : st === "active"
+      ? "Voice: your voice needs verifying at elevenlabs.com first (open 🗣 My voice). Speaking in the system voice until then."
+      : st === "paused"
+        ? "Voice: your voice is paused (system voice)."
+        : "Voice: system voice. Open 🗣 My voice to create one that sounds like you.";
+}
+
+async function refreshServices(attempt = 0) {
+  await llmAvailable(attempt > 0);
+  const ai = llmStatus();
+  llmOn = ai.on;
+  const llmEl = $("#llm-status");
+  llmEl.className = `llm-status ${ai.on ? "on" : "off"}`;
+  llmEl.textContent = ai.on
+    ? `✨ AI suggestions on${ai.fastModel ? ` (${ai.fastModel})` : ""}`
+    : ai.reason === "no-key"
+      ? "AI suggestions off: the LLM server has no API key. Add ANTHROPIC_API_KEY to VisualEyes/.env and restart it."
+      : "AI suggestions off: LLM server not running (npm run dev:all). On-device prediction still works.";
+  updateTtsLine();
+  if (ai.on) void llmWarm();
+  if (ai.reason === "no-server" && attempt < 30) setTimeout(() => void refreshServices(attempt + 1), 2000);
+}
+
 // ---------- boot ----------
 async function boot() {
   const words = await fetch("./data/words-10k.txt").then((r) => r.text());
   predictor.load(words.split("\n"), CORE_WORDS, SEED_PHRASES);
+  applyProfile(profiles.active);
   gazeKb.update();
   render();
-  llmOn = await llmAvailable();
+  void voiceCtl.refresh().then(updateTtsLine); // learn whether this user already has a voice; harmless if the service is not running
+  void refreshServices();
   try {
     const le = localStorage.getItem("gazetype.lastError.v1");
     if (le) lastError = JSON.parse(le);

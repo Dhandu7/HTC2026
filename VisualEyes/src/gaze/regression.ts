@@ -69,7 +69,23 @@ export class GazeRegressor {
     for (const s of samples)
       s.features.forEach((v, i) => (this.std[i] += (v - this.mean[i]) ** 2 / samples.length));
     this.std = this.std.map((v, i) => Math.max(Math.sqrt(v), this.stdFloor[i] ?? 0) || 1);
+    this.solveWeights(samples, null, 0);
+  }
 
+  /**
+   * Personalise a pooled model: keep the prior's feature normalisation and pull the
+   * weights toward the prior's ("ridge toward the prior"). `strength` plays the role of
+   * lambda; the intercept stays free so a per-user offset is always learnable.
+   */
+  fitWithPrior(samples: Sample[], prior: GazeRegressor, strength: number): void {
+    if (!prior.trained) throw new Error("prior is not trained");
+    if (samples.length < 1) throw new Error("need at least 1 calibration sample");
+    this.mean = [...prior.mean];
+    this.std = [...prior.std];
+    this.solveWeights(samples, prior, strength);
+  }
+
+  private solveWeights(samples: Sample[], prior: GazeRegressor | null, strength: number): void {
     const rows = samples.map((s) => expand(this.normalize(s.features), this.quadCount));
     const k = rows[0].length;
     const XtX = Array.from({ length: k }, () => new Array(k).fill(0));
@@ -85,7 +101,15 @@ export class GazeRegressor {
     });
     // Don't regularise the intercept.
     // Column i (i>=1) is z-feature i-1 for i<=d, then quadratic terms (scale 1).
-    for (let i = 1; i < k; i++) XtX[i][i] += this.lambda * (i <= d ? (this.penaltyScale[i - 1] ?? 1) : 1);
+    const d = this.mean.length;
+    const reg = prior ? strength : this.lambda;
+    for (let i = 1; i < k; i++) {
+      XtX[i][i] += reg * (i <= d ? (this.penaltyScale[i - 1] ?? 1) : 1);
+      if (prior) {
+        Xty[i] += reg * prior.wx[i];
+        Xtx2[i] += reg * prior.wy[i];
+      }
+    }
     this.wx = solve(XtX, Xty);
     this.wy = solve(XtX, Xtx2);
     this.trained = true;

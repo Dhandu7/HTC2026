@@ -7,10 +7,22 @@ const CDN_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/was
 const CDN_MODEL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 
+/** Raw MediaPipe output for one frame, kept so sessions can be recorded and replayed offline. */
+export interface RawFace {
+  /** 478 landmarks flattened as x,y,z (normalised image coordinates). */
+  lm: Float32Array;
+  /** Blendshape scores in MediaPipe's category order (see blendNames). */
+  blend: Float32Array;
+  blendNames: string[];
+  /** Column-major 4x4 facial transformation matrix, if available. */
+  matrix: number[] | null;
+}
+
 export interface FaceFrame extends GazeFeatures {
   t: number;
   /** Detection latency for this frame (ms). */
   inferMs: number;
+  raw: RawFace;
 }
 
 /** True if a local asset exists (Vite's SPA fallback returns HTML for missing files, so check content type). */
@@ -78,6 +90,19 @@ export class FaceTracker {
     this.stream?.getTracks().forEach((t) => t.stop());
   }
 
+  /** The live camera stream (for local session video recording). */
+  get mediaStream(): MediaStream | null {
+    return this.stream;
+  }
+
+  get videoSize(): { width: number; height: number } {
+    return { width: this.video.videoWidth, height: this.video.videoHeight };
+  }
+
+  get cameraLabel(): string {
+    return this.stream?.getVideoTracks()[0]?.label ?? "";
+  }
+
   private loop = () => {
     if (!this.running || !this.landmarker) return;
     const v = this.video;
@@ -94,10 +119,23 @@ export class FaceTracker {
         this.onFrame(null);
       } else {
         const blend: Record<string, number> = {};
-        for (const c of res.faceBlendshapes?.[0]?.categories ?? []) blend[c.categoryName] = c.score;
+        const cats = res.faceBlendshapes?.[0]?.categories ?? [];
+        for (const c of cats) blend[c.categoryName] = c.score;
         const matrix = res.facialTransformationMatrixes?.[0]?.data;
         const f = extractFeatures(lm, blend, matrix, v.videoWidth / v.videoHeight);
-        this.onFrame({ ...f, t, inferMs });
+        const flat = new Float32Array(lm.length * 3);
+        lm.forEach((p, i) => {
+          flat[i * 3] = p.x;
+          flat[i * 3 + 1] = p.y;
+          flat[i * 3 + 2] = p.z ?? 0;
+        });
+        const raw: RawFace = {
+          lm: flat,
+          blend: Float32Array.from(cats, (c) => c.score),
+          blendNames: cats.map((c) => c.categoryName),
+          matrix: matrix ? Array.from(matrix) : null,
+        };
+        this.onFrame({ ...f, t, inferMs, raw });
       }
     }
     // requestVideoFrameCallback keeps us in lockstep with the camera where supported.

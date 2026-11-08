@@ -3,3 +3,12 @@ node_modules
 .env
 dist/
 POC/public/mediapipe/
+
+# voice sidecar: local tooling and environment
+VisualEyes/voice-sidecar/.tools/
+__pycache__/
+*.pyc
+.pytest_cache/
+VisualEyes/voice-sidecar/.venv-hosted/
+VisualEyes/recordings/
+*.webm

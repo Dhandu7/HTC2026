@@ -2,6 +2,10 @@
 
 Status: **planned, not built.** Written 5 Nov 2026.
 
+> **Both engine choices were dropped (7 Nov 2026):** VoiceStudio, then OpenVoice, in favour of hosted ElevenLabs (`AWS_VOICE_HANDOFF.md`). The app-side provider, router, PCM player and phrase-cache design below still applies.
+>
+> **Earlier note, engine choice superseded:** the default engine is now OpenVoice V2, behind a phrase-first, consent-first flow. See `VOICE_ENGINE_FLOW.md`. The provider interface, router, PCM player and phrase cache below still apply, and VoiceStudio remains an optional provider.
+
 Goal: when the user selects **🔊 Speak**, GazeType speaks in *their own* (banked or cloned) voice, starting within about 300 ms, fully on-device. It must still speak, in the system voice, if anything in the voice pipeline is missing or slow.
 
 ## Why VoiceStudio
